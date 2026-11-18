@@ -1,0 +1,21 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Android & Gradle build outputs / signing secrets
+.gradle/
+.idea/
+local.properties
+keystore.properties
+*.jks
+*.keystore
+*.apk
+*.aab
+android-native/.gradle/
+android-native/app/build/

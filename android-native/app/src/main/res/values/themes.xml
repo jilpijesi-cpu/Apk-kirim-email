@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.GSwiftRelay.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_splash_logo</item>
+        <item name="postSplashScreenTheme">@style/Theme.GSwiftRelay</item>
+    </style>
+
+    <style name="Theme.GSwiftRelay" parent="Theme.Material3.DayNight.NoActionBar" />
+</resources>
