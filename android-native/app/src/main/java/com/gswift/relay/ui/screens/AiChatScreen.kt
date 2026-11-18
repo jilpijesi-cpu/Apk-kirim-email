@@ -1,6 +1,9 @@
 package com.gswift.relay.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -21,12 +25,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.DeleteSweep
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.MicNone
+import androidx.compose.material.icons.rounded.Psychology
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -34,11 +44,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,16 +59,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gswift.relay.data.model.AppPresets
 import com.gswift.relay.data.model.ChatMessage
+import com.gswift.relay.ui.theme.AppSkyGradient
 import com.gswift.relay.ui.theme.ClaudeStarburstLogo
 import com.gswift.relay.ui.theme.ClaudeTerracotta
-import com.gswift.relay.ui.theme.ClaudeWarmBg
+import com.gswift.relay.ui.theme.EmeraldOnline
 import com.gswift.relay.ui.theme.NavyPrimary
 import com.gswift.relay.ui.viewmodel.MainUiState
 
@@ -78,15 +92,20 @@ fun AiChatScreen(
 ) {
     var inputPrompt by remember { mutableStateOf("") }
     var showModelMenu by remember { mutableStateOf(false) }
+    var showPresetPicker by remember { mutableStateOf(false) }
     var showRulesDialog by remember { mutableStateOf(false) }
+    var showQuickPlusMenu by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     val allModels = remember(uiState.aiProviders) {
         uiState.aiProviders.flatMap { it.models }
     }
+    val hasUserConversation = remember(uiState.aiMessages) {
+        uiState.aiMessages.any { it.role == "user" }
+    }
 
     LaunchedEffect(uiState.aiMessages.size) {
-        if (uiState.aiMessages.isNotEmpty()) {
+        if (hasUserConversation && uiState.aiMessages.isNotEmpty()) {
             listState.animateScrollToItem(uiState.aiMessages.lastIndex)
         }
     }
@@ -94,186 +113,352 @@ fun AiChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(ClaudeWarmBg)
+            .background(AppSkyGradient)
+            .statusBarsPadding()
             .navigationBarsPadding()
             .imePadding()
     ) {
-        // Full-Screen Claude Mythos Header matching App.tsx AI tab
-        Surface(color = Color.White, shadowElevation = 1.dp) {
-            Column(
-                modifier = Modifier
-                    .statusBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+        // Minimal Full-Screen Top Bar matching Screenshot 3 (AI Tab)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            IconButton(onClick = onBackToSend) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "Kembali ke Kirim",
+                    tint = Color(0xFF1E293B)
+                )
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onBackToSend) {
+                // 1. Key rotation / AI Model switcher with green active indicator
+                Box {
+                    IconButton(onClick = { showModelMenu = true }) {
+                        Box {
                             Icon(
-                                Icons.AutoMirrored.Rounded.ArrowBack,
-                                contentDescription = "Kembali ke Kirim",
-                                tint = Color(0xFF451A03)
+                                imageVector = Icons.Rounded.Sync,
+                                contentDescription = "Model & Key AI",
+                                tint = EmeraldOnline,
+                                modifier = Modifier.size(22.dp)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = 3.dp, y = (-2).dp)
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF10B981))
+                                    .border(1.dp, Color.White, CircleShape)
                             )
                         }
-                        ClaudeStarburstLogo(
-                            modifier = Modifier.size(22.dp),
-                            animated = uiState.isAiThinking
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "Claude Mythos",
-                            fontFamily = FontFamily.Serif,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = Color(0xFF451A03)
-                        )
                     }
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box {
-                            OutlinedButton(
-                                onClick = { showModelMenu = true },
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text(
-                                    text = (uiState.selectedAiModel ?: "Auto").substringAfterLast("/").take(14),
-                                    fontSize = 11.sp,
-                                    maxLines = 1
+                    DropdownMenu(
+                        expanded = showModelMenu,
+                        onDismissRequest = { showModelMenu = false }
+                    ) {
+                        if (allModels.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Auto-Rotate Multi-Provider", fontSize = 13.sp) },
+                                onClick = { showModelMenu = false }
+                            )
+                        } else {
+                            allModels.forEach { model ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = if (model == uiState.selectedAiModel) "✓ $model" else model,
+                                            fontSize = 12.5.sp,
+                                            fontWeight = if (model == uiState.selectedAiModel) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    onClick = {
+                                        onSelectModel(model)
+                                        showModelMenu = false
+                                    }
                                 )
                             }
-                            DropdownMenu(
-                                expanded = showModelMenu,
-                                onDismissRequest = { showModelMenu = false }
-                            ) {
-                                allModels.forEach { model ->
-                                    DropdownMenuItem(
-                                        text = { Text(model, fontSize = 13.sp) },
-                                        onClick = {
-                                            onSelectModel(model)
-                                            showModelMenu = false
-                                        }
-                                    )
-                                }
+                        }
+                    }
+                }
+
+                // 2. Compose / New Chat
+                IconButton(onClick = onClearChat) {
+                    Icon(
+                        imageVector = Icons.Rounded.EditNote,
+                        contentDescription = "Chat Baru",
+                        tint = Color(0xFF1E293B),
+                        modifier = Modifier.size(23.dp)
+                    )
+                }
+
+                // 3. Link / Custom CTA URL & Rules
+                IconButton(onClick = { showRulesDialog = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Link,
+                        contentDescription = "Tautan CTA & Aturan",
+                        tint = Color(0xFF1E293B),
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+
+                // 4. Brain / Bank & Scenario Picker
+                IconButton(onClick = { showPresetPicker = true }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Psychology,
+                        contentDescription = "Bank & Skenario",
+                        tint = ClaudeTerracotta,
+                        modifier = Modifier.size(23.dp)
+                    )
+                }
+            }
+        }
+
+        // Center Area: Hero Welcome (Screenshot 3) OR Active Conversation
+        if (!hasUserConversation && !uiState.isAiThinking) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                ) {
+                    ClaudeStarburstLogo(
+                        modifier = Modifier.size(72.dp),
+                        animated = true
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "Claude Mythos",
+                        fontFamily = FontFamily.Serif,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color(0xFF0F172A)
+                    )
+                    Text(
+                        text = "Ada yang bisa saya bantu buatkan hari ini?",
+                        fontSize = 14.sp,
+                        color = Color(0xFF64748B),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(uiState.aiMessages.filterNot { it.id == "welcome" }, key = { it.id }) { msg ->
+                    ChatBubble(
+                        message = msg,
+                        onApplyDraft = onApplyDraft
+                    )
+                }
+                if (uiState.isAiThinking) {
+                    item {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(8.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = ClaudeTerracotta,
+                                strokeWidth = 2.dp
+                            )
+                            Text(
+                                text = "Claude Mythos sedang merancang draf...",
+                                fontSize = 12.sp,
+                                color = ClaudeTerracotta,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom Floating White Pill Composer matching Screenshot 3
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(30.dp),
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.dp, Color(0xFFE2E8F0)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box {
+                        IconButton(
+                            onClick = { showQuickPlusMenu = true },
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Add,
+                                contentDescription = "Sisipkan Skenario",
+                                tint = Color(0xFF1E293B),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showQuickPlusMenu,
+                            onDismissRequest = { showQuickPlusMenu = false }
+                        ) {
+                            val currentBank = AppPresets.banks.find { it.key == uiState.selectedBankKey }?.label ?: "BCA"
+                            AppPresets.scenarios.forEach { sc ->
+                                DropdownMenuItem(
+                                    text = { Text("${sc.label} ($currentBank)", fontSize = 13.sp) },
+                                    onClick = {
+                                        onSelectScenario(sc.id)
+                                        inputPrompt = sc.promptTemplate(currentBank)
+                                        showQuickPlusMenu = false
+                                    }
+                                )
                             }
                         }
-                        IconButton(onClick = { showRulesDialog = true }) {
-                            Icon(Icons.Rounded.Tune, contentDescription = "Aturan AI")
-                        }
-                        IconButton(onClick = onClearChat) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = "Reset Chat")
-                        }
                     }
-                }
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    AppPresets.banks.forEach { bank ->
-                        FilterChip(
-                            selected = uiState.selectedBankKey == bank.key,
-                            onClick = { onSelectBank(bank.key) },
-                            label = { Text(bank.label, fontSize = 11.sp) }
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    AppPresets.scenarios.forEach { sc ->
-                        FilterChip(
-                            selected = uiState.selectedScenario == sc.id,
-                            onClick = {
-                                onSelectScenario(sc.id)
-                                val bankName = AppPresets.banks
-                                    .find { it.key == uiState.selectedBankKey }?.label ?: "BCA"
-                                inputPrompt = sc.promptTemplate(bankName)
-                            },
-                            label = { Text(sc.label, fontSize = 11.sp) }
-                        )
-                    }
-                }
-            }
-        }
-        HorizontalDivider(color = Color(0xFFE7E5E4))
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(uiState.aiMessages, key = { it.id }) { msg ->
-                ChatBubble(
-                    message = msg,
-                    onApplyDraft = onApplyDraft
-                )
-            }
-            if (uiState.isAiThinking) {
-                item {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(8.dp)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(vertical = 6.dp),
+                        contentAlignment = Alignment.CenterStart
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            color = ClaudeTerracotta,
-                            strokeWidth = 2.dp
+                        if (inputPrompt.isEmpty()) {
+                            Text(
+                                text = "Minta Claude...",
+                                fontSize = 15.sp,
+                                color = Color(0xFF64748B)
+                            )
+                        }
+                        BasicTextField(
+                            value = inputPrompt,
+                            onValueChange = { inputPrompt = it },
+                            textStyle = TextStyle(
+                                fontSize = 15.sp,
+                                color = Color(0xFF0F172A)
+                            ),
+                            cursorBrush = SolidColor(ClaudeTerracotta),
+                            maxLines = 4,
+                            modifier = Modifier.fillMaxWidth()
                         )
-                        Text(
-                            text = "Claude Mythos sedang merancang draf...",
-                            fontSize = 12.sp,
-                            color = ClaudeTerracotta,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    }
+
+                    if (inputPrompt.isNotBlank()) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(ClaudeTerracotta)
+                                .clickable(enabled = !uiState.isAiThinking) {
+                                    val toSend = inputPrompt
+                                    inputPrompt = ""
+                                    onSendPrompt(toSend)
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Send,
+                                contentDescription = "Kirim Prompt",
+                                tint = Color.White,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { showPresetPicker = true },
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MicNone,
+                                contentDescription = "Pilih Skenario Cepat",
+                                tint = Color(0xFF334155),
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
             }
         }
+    }
 
-        // Composer Row
-        Surface(color = Color.White, shadowElevation = 4.dp) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = inputPrompt,
-                    onValueChange = { inputPrompt = it },
-                    placeholder = { Text("Instruksi draf email...", fontSize = 13.sp) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(18.dp),
-                    maxLines = 4
-                )
+    // Bank & Scenario Configurator Dialog (triggered from Brain icon)
+    if (showPresetPicker) {
+        AlertDialog(
+            onDismissRequest = { showPresetPicker = false },
+            title = { Text("Pilih Bank & Skenario Draf") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Bank Sasaran:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AppPresets.banks.forEach { bank ->
+                            FilterChip(
+                                selected = uiState.selectedBankKey == bank.key,
+                                onClick = { onSelectBank(bank.key) },
+                                label = { Text(bank.label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                    Text("Skenario Transaksi:", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AppPresets.scenarios.forEach { sc ->
+                            FilterChip(
+                                selected = uiState.selectedScenario == sc.id,
+                                onClick = {
+                                    onSelectScenario(sc.id)
+                                    val bankName = AppPresets.banks
+                                        .find { it.key == uiState.selectedBankKey }?.label ?: "BCA"
+                                    inputPrompt = sc.promptTemplate(bankName)
+                                },
+                                label = { Text(sc.label, fontSize = 11.sp) }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
                 Button(
-                    onClick = {
-                        val toSend = inputPrompt
-                        inputPrompt = ""
-                        onSendPrompt(toSend)
-                    },
-                    enabled = inputPrompt.isNotBlank() && !uiState.isAiThinking,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = ClaudeTerracotta)
+                    onClick = { showPresetPicker = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary)
                 ) {
-                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Kirim Prompt")
+                    Text("Selesai")
                 }
             }
-        }
+        )
     }
 
     if (showRulesDialog) {
@@ -302,10 +487,13 @@ fun AiChatScreen(
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    onSaveCustomSettings(linkText.trim(), rulesText.trim())
-                    showRulesDialog = false
-                }) {
+                Button(
+                    onClick = {
+                        onSaveCustomSettings(linkText.trim(), rulesText.trim())
+                        showRulesDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary)
+                ) {
                     Text("Simpan")
                 }
             },
@@ -332,7 +520,7 @@ private fun ChatBubble(
         Surface(
             color = if (isUser) NavyPrimary else Color.White,
             shape = RoundedCornerShape(18.dp),
-            shadowElevation = 1.dp,
+            shadowElevation = 2.dp,
             modifier = Modifier.widthIn(max = 315.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

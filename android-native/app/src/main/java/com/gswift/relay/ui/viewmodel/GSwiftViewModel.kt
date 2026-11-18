@@ -126,7 +126,8 @@ class GSwiftViewModel(
                 templates = savedTemplates,
                 aiMessages = savedChat,
                 customCancelLink = cancelLink,
-                customDataRules = dataRules
+                customDataRules = dataRules,
+                logs = listOf(LogEntry(nowTime(), LogType.INFO, "G-Swift Relay active. System ready."))
             )
         }
 

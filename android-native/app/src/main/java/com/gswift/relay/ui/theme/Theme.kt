@@ -4,6 +4,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -19,6 +20,15 @@ val EmeraldOnline = Color(0xFF059669)
 val RoseError = Color(0xFFE11D48)
 val SlateSurface = Color(0xFFF8FAFC)
 val SlateBorder = Color(0xFFE2E8F0)
+
+val AppSkyGradient = Brush.verticalGradient(
+    colors = listOf(
+        Color(0xFFBEE0FF),
+        Color(0xFFDCEEFF),
+        Color(0xFFF6FAFF),
+        Color(0xFFFFFFFF)
+    )
+)
 
 private val GSwiftLightColors = lightColorScheme(
     primary = NavyPrimary,

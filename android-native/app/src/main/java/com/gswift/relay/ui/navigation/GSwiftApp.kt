@@ -327,6 +327,7 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
             startDestination = AppDestination.Send.route,
             modifier = Modifier
                 .fillMaxSize()
+                .background(com.gswift.relay.ui.theme.AppSkyGradient)
                 .padding(innerPadding)
         ) {
             composable(AppDestination.Send.route) {
@@ -339,6 +340,7 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
                     onDismissBanner = viewModel::dismissDeliveryBanner,
                     onGoToAccounts = { navigateTo(AppDestination.Accounts.route) },
                     onGoToAi = { navigateTo(AppDestination.Ai.route) },
+                    onGoToTemplates = { navigateTo(AppDestination.Templates.route) },
                     extractEmails = viewModel::extractCleanEmails
                 )
             }
