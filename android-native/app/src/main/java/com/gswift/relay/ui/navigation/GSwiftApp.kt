@@ -340,12 +340,16 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
             composable(AppDestination.Send.route) {
                 SendScreen(
                     uiState = uiState,
-                    onUpdateFields = viewModel::updateMailFields,
+                    onUpdateFields = { to, subject, message ->
+                        viewModel.updateMailFields(to, subject, message)
+                    },
                     onCleanOrPasteRecipient = viewModel::handleRecipientPasteOrClean,
                     onCleanCurrentRecipient = viewModel::cleanCurrentRecipientInput,
                     onDismissPasteFeedback = viewModel::dismissPasteFeedback,
                     onDismissSendError = viewModel::dismissSendErrorInline,
-                    onApplyBankToDraft = viewModel::applyBankToSendDraft,
+                    onApplyBankToDraft = { bankKey, resetBlank ->
+                        viewModel.applyBankToSendDraft(bankKey, resetBlank)
+                    },
                     onApplyTemplate = viewModel::applyTemplateToSend,
                     onSendClick = viewModel::sendEmail,
                     onClearClick = viewModel::clearMailForm,
@@ -380,7 +384,9 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
             composable(AppDestination.Templates.route) {
                 TemplatesScreen(
                     uiState = uiState,
-                    onSaveTemplate = viewModel::saveTemplate,
+                    onSaveTemplate = { name, category, subject, message, editingId ->
+                        viewModel.saveTemplate(name, category, subject, message, editingId)
+                    },
                     onDeleteTemplate = viewModel::deleteTemplate,
                     onDeleteAllTemplates = viewModel::deleteAllTemplates,
                     onApplyTemplate = { tpl ->
