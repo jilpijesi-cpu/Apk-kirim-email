@@ -1,6 +1,10 @@
 package com.gswift.relay.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,31 +17,36 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.DoneAll
+import androidx.compose.material.icons.rounded.Monitor
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Send
-import androidx.compose.material.icons.rounded.Settings
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,15 +54,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.text.HtmlCompat
-import com.gswift.relay.data.model.SmtpConnectionState
+import com.gswift.relay.data.model.AppPresets
 import com.gswift.relay.ui.theme.ClaudeTerracotta
 import com.gswift.relay.ui.theme.EmeraldOnline
+import com.gswift.relay.ui.theme.NavyDark
 import com.gswift.relay.ui.theme.NavyPrimary
 import com.gswift.relay.ui.theme.RoseError
 import com.gswift.relay.ui.viewmodel.MainUiState
@@ -65,257 +80,717 @@ fun SendScreen(
     onUpdateFields: (to: String?, subject: String?, message: String?) -> Unit,
     onSendClick: () -> Unit,
     onClearClick: () -> Unit,
+    onApplyLastSent: () -> Unit,
     onDismissBanner: () -> Unit,
     onGoToAccounts: () -> Unit,
     onGoToAi: () -> Unit,
     extractEmails: (String) -> List<String>
 ) {
-    var showPreviewDialog by remember { mutableStateOf(false) }
+    var previewMobileMode by remember { mutableStateOf(true) }
+    var showRawHtml by remember { mutableStateOf(false) }
+
     val validEmails = remember(uiState.recipientInput) { extractEmails(uiState.recipientInput) }
+    val detectedBankKey = remember(uiState.subjectInput, uiState.messageInput) {
+        AppPresets.detectBankKey("${uiState.subjectInput} ${uiState.messageInput}")
+    }
+    val detectedBank = remember(detectedBankKey) {
+        AppPresets.banks.find { it.key == detectedBankKey } ?: AppPresets.banks.first()
+    }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (uiState.smtpState == SmtpConnectionState.UNCONFIGURED) {
-            Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFBEB)),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Akun SMTP Belum Diatur",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = Color(0xFF92400E)
-                        )
-                        Text(
-                            text = "Tambahkan email dan App Password 16 digit untuk mengirim.",
-                            fontSize = 12.sp,
-                            color = Color(0xFFB45309)
-                        )
-                    }
-                    TextButton(onClick = onGoToAccounts) {
-                        Icon(Icons.Rounded.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Atur", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
-
-        uiState.deliveryBanner?.let { banner ->
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = if (banner.isSuccess) Color(0xFFECFDF5) else Color(0xFFFFF1F2)
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = if (banner.isSuccess) Icons.Rounded.CheckCircle else Icons.Rounded.ErrorOutline,
-                            contentDescription = null,
-                            tint = if (banner.isSuccess) EmeraldOnline else RoseError
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = banner.title,
-                            fontWeight = FontWeight.Bold,
-                            color = if (banner.isSuccess) Color(0xFF065F46) else Color(0xFF9F1239),
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = onDismissBanner) {
-                            Text("Tutup")
-                        }
-                    }
-                    Text(
-                        text = banner.detail,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    banner.tip?.let { tipText ->
-                        Surface(
-                            color = Color.White.copy(alpha = 0.7f),
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
-                            Text(
-                                text = "Solusi: $tipText",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF881337),
-                                modifier = Modifier.padding(10.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(20.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 12.dp)
+                .padding(bottom = 86.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            // Main Card matching App.tsx Send Tab Card
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                shape = RoundedCornerShape(20.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(20.dp))
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Kirim Email Cepat",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Row {
-                        IconButton(onClick = { showPreviewDialog = true }) {
-                            Icon(Icons.Rounded.Visibility, contentDescription = "Pratinjau", tint = NavyPrimary)
+                Column {
+                    // Upper Anti-Spam Security Header Banner
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color(0xFFF8FAFC))
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF16A34A))
+                                )
+                                Text(
+                                    text = "SISTEM ANTI-SPAM GMAIL – PENGIRIM",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
+                            Text(
+                                text = "AKTIF",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Black,
+                                color = NavyPrimary
+                            )
                         }
-                        IconButton(onClick = onClearClick) {
-                            Icon(Icons.Rounded.DeleteOutline, contentDescription = "Bersihkan", tint = Color(0xFF64748B))
+
+                        // Active Sender Account Badge (Deep Navy Gradient or Dashed Prompt)
+                        if (uiState.smtpConfig.username.isNotBlank()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(NavyPrimary, NavyDark)
+                                        )
+                                    )
+                                    .clickable { onGoToAccounts() }
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color.White.copy(alpha = 0.14f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Shield,
+                                        contentDescription = null,
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "AKUN PENGIRIM AKTIF",
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color(0xFFBFDBFE),
+                                        letterSpacing = 1.sp
+                                    )
+                                    Text(
+                                        text = uiState.smtpConfig.username,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.12f),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .clip(CircleShape)
+                                                .background(Color(0xFF4ADE80))
+                                        )
+                                        Text(
+                                            text = "SECURE RELAY",
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFFF1F5F9))
+                                    .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(12.dp))
+                                    .clickable { onGoToAccounts() }
+                                    .padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Rounded.WarningAmber,
+                                    contentDescription = null,
+                                    tint = Color(0xFFF59E0B),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "BELUM ADA AKUN PENGIRIM • KETUK UNTUK ATUR",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
                         }
                     }
-                }
 
-                OutlinedTextField(
-                    value = uiState.recipientInput,
-                    onValueChange = { onUpdateFields(it, null, null) },
-                    label = { Text("Kepada (Email Penerima)") },
-                    placeholder = { Text("contoh@gmail.com, lain@domain.com") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    singleLine = false,
-                    maxLines = 3
-                )
+                    HorizontalDivider(color = Color(0xFFE2E8F0))
 
-                if (validEmails.isNotEmpty()) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    // Form Body
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        validEmails.forEach { email ->
-                            AssistChip(
-                                onClick = {},
-                                label = { Text(email, fontSize = 11.sp) }
+                        // Recipient Field Header with Auto-Filter Badge
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "EMAIL PENERIMA",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = NavyPrimary
+                                )
+                                Surface(
+                                    color = Color(0xFFEFF6FF),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFBFDBFE))
+                                ) {
+                                    Text(
+                                        text = "Auto-Filter Aktif",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = NavyPrimary,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = onClearClick,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DeleteOutline,
+                                    contentDescription = "Bersihkan Form",
+                                    tint = Color(0xFF64748B),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = uiState.recipientInput,
+                            onValueChange = { onUpdateFields(it, null, null) },
+                            placeholder = { Text("Tempel email atau teks kontak...", fontSize = 13.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = if (validEmails.isNotEmpty()) EmeraldOnline else NavyPrimary,
+                                unfocusedBorderColor = if (validEmails.isNotEmpty()) EmeraldOnline else Color(0xFFCBD5E1)
+                            ),
+                            trailingIcon = {
+                                if (uiState.recipientInput.isNotBlank()) {
+                                    IconButton(onClick = { onUpdateFields("", null, null) }) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "Hapus", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            },
+                            maxLines = 3
+                        )
+
+                        if (validEmails.isNotEmpty()) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                validEmails.forEach { email ->
+                                    AssistChip(
+                                        onClick = {},
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Rounded.CheckCircle,
+                                                contentDescription = null,
+                                                tint = EmeraldOnline,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        },
+                                        label = { Text(email, fontSize = 11.sp) }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Last Sent Email Quick-Load Pill
+                        val lastSent = uiState.lastSentEmail
+                        if (lastSent != null) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(CircleShape)
+                                    .background(Color(0xFFF8FAFC))
+                                    .border(1.dp, Color(0xFFE2E8F0), CircleShape)
+                                    .clickable { onApplyLastSent() }
+                                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFFD1FAE5)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.DoneAll,
+                                        contentDescription = null,
+                                        tint = EmeraldOnline,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                                Text(
+                                    text = lastSent.to,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF0F172A),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = lastSent.timestamp,
+                                    fontSize = 9.sp,
+                                    color = Color(0xFF64748B)
+                                )
+                                Surface(
+                                    color = NavyPrimary,
+                                    shape = CircleShape
+                                ) {
+                                    Text(
+                                        text = "GUNAKAN",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color.White,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFFF8FAFC))
+                                    .border(1.dp, Color(0xFFE2E8F0), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Rounded.Schedule,
+                                    contentDescription = null,
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "TERAKHIR DIKIRIM: Belum ada riwayat",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+                        }
+
+                        // Subject Field
+                        Text(
+                            text = "SUBJEK EMAIL",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            color = NavyPrimary
+                        )
+                        OutlinedTextField(
+                            value = uiState.subjectInput,
+                            onValueChange = { onUpdateFields(null, it, null) },
+                            placeholder = { Text("[Resmi] Pemberitahuan Transaksi...", fontSize = 13.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(14.dp),
+                            singleLine = true,
+                            trailingIcon = {
+                                if (uiState.subjectInput.isNotBlank()) {
+                                    IconButton(onClick = { onUpdateFields(null, "", null) }) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "Kosongkan", modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                        )
+
+                        // Draft Editor + Native 1:1 Preview Box
+                        if (uiState.messageInput.isNotBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = Color.White,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
+                            ) {
+                                Column {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color(0xFFF8FAFC))
+                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(7.dp)
+                                                    .clip(CircleShape)
+                                                    .background(EmeraldOnline)
+                                            )
+                                            Text(
+                                                text = "PRATINJAU (${detectedBank.label})",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = Color(0xFF334155)
+                                            )
+                                        }
+
+                                        Row(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(0xFFE2E8F0))
+                                                .padding(2.dp),
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (!showRawHtml && previewMobileMode) Color.White else Color.Transparent)
+                                                    .clickable {
+                                                        showRawHtml = false
+                                                        previewMobileMode = true
+                                                    }
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.PhoneAndroid, contentDescription = null, modifier = Modifier.size(12.dp))
+                                                Text("HP", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (!showRawHtml && !previewMobileMode) Color.White else Color.Transparent)
+                                                    .clickable {
+                                                        showRawHtml = false
+                                                        previewMobileMode = false
+                                                    }
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Monitor, contentDescription = null, modifier = Modifier.size(12.dp))
+                                                Text("Desktop", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                            Row(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(6.dp))
+                                                    .background(if (showRawHtml) Color.White else Color.Transparent)
+                                                    .clickable { showRawHtml = !showRawHtml }
+                                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                            ) {
+                                                Text("Edit", fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+
+                                    if (!showRawHtml) {
+                                        val plainPreview = remember(uiState.messageInput) {
+                                            HtmlCompat.fromHtml(
+                                                uiState.messageInput,
+                                                HtmlCompat.FROM_HTML_MODE_LEGACY
+                                            ).toString().trim()
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(if (previewMobileMode) Color(0xFFF1F5F9) else Color.White)
+                                                .padding(if (previewMobileMode) 12.dp else 10.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Surface(
+                                                color = Color.White,
+                                                shape = RoundedCornerShape(14.dp),
+                                                border = androidx.compose.foundation.BorderStroke(
+                                                    1.dp,
+                                                    Color(detectedBank.colorHex).copy(alpha = 0.25f)
+                                                ),
+                                                modifier = Modifier.fillMaxWidth(if (previewMobileMode) 0.92f else 1f)
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(4.dp)
+                                                            .clip(CircleShape)
+                                                            .background(Color(detectedBank.colorHex))
+                                                    )
+                                                    Text(
+                                                        text = uiState.subjectInput.ifBlank { "Draf Email ${detectedBank.label}" },
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 13.sp,
+                                                        color = Color(0xFF0F172A)
+                                                    )
+                                                    Text(
+                                                        text = plainPreview.ifBlank { uiState.messageInput },
+                                                        fontSize = 12.sp,
+                                                        color = Color(0xFF334155),
+                                                        lineHeight = 18.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (uiState.messageInput.isBlank() || showRawHtml) {
+                            OutlinedTextField(
+                                value = uiState.messageInput,
+                                onValueChange = { onUpdateFields(null, null, it) },
+                                label = { Text("Konten Pesan / HTML Draf") },
+                                placeholder = { Text("Tulis isi email atau gunakan AI Chat untuk draf otomatis...", fontSize = 13.sp) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(165.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = if (uiState.messageInput.contains("<")) FontFamily.Monospace else FontFamily.Default,
+                                    fontSize = 12.sp
+                                )
                             )
                         }
                     }
                 }
+            }
+        }
 
-                OutlinedTextField(
-                    value = uiState.subjectInput,
-                    onValueChange = { onUpdateFields(null, it, null) },
-                    label = { Text("Subjek Email") },
-                    placeholder = { Text("[Resmi] Konfirmasi Transaksi...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    singleLine = true
-                )
-
-                OutlinedTextField(
-                    value = uiState.messageInput,
-                    onValueChange = { onUpdateFields(null, null, it) },
-                    label = { Text("Konten Pesan / HTML Draf") },
-                    placeholder = { Text("Tulis isi email atau buat lewat tab AI Chat...") },
+        // Bottom Sticky Floating Action Bar matching App.tsx (Gold Send Button + AI Quick Button — ZERO clipping!)
+        Surface(
+            color = Color.White.copy(alpha = 0.96f),
+            shadowElevation = 10.dp,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+        ) {
+            Column {
+                HorizontalDivider(color = Color(0xFFE2E8F0))
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(210.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = if (uiState.messageInput.contains("<")) FontFamily.Monospace else FontFamily.Default,
-                        fontSize = 13.sp
-                    )
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     OutlinedButton(
                         onClick = onGoToAi,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp)
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.height(44.dp)
                     ) {
                         Icon(
                             Icons.Rounded.AutoAwesome,
                             contentDescription = null,
                             tint = ClaudeTerracotta,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(17.dp)
                         )
-                        Spacer(Modifier.width(6.dp))
-                        Text("Buat dengan AI", color = ClaudeTerracotta, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = "Buat AI",
+                            color = ClaudeTerracotta,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
                     }
 
-                    Button(
-                        onClick = onSendClick,
-                        enabled = !uiState.isSendingEmail,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary)
-                    ) {
-                        if (uiState.isSendingEmail) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                color = Color.White,
-                                strokeWidth = 2.dp
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        Color(0xFFFFD700),
+                                        Color(0xFFFFC000),
+                                        Color(0xFFE6AC00)
+                                    )
+                                )
                             )
-                        } else {
-                            Icon(Icons.Rounded.Send, contentDescription = null, modifier = Modifier.size(18.dp))
+                            .clickable(enabled = !uiState.isSendingEmail) { onSendClick() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (uiState.isSendingEmail) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = Color.White,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Rounded.Send,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Text(
+                                text = if (uiState.isSendingEmail) "MENGIRIM..." else "KIRIM SEKARANG",
+                                color = Color.White,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 12.sp,
+                                letterSpacing = 0.6.sp,
+                                maxLines = 1
+                            )
                         }
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (uiState.isSendingEmail) "Mengirim..." else "Kirim")
                     }
                 }
             }
         }
     }
 
-    if (showPreviewDialog) {
-        val plainPreview = remember(uiState.messageInput) {
-            HtmlCompat.fromHtml(uiState.messageInput, HtmlCompat.FROM_HTML_MODE_LEGACY).toString().trim()
-        }
-        AlertDialog(
-            onDismissRequest = { showPreviewDialog = false },
-            title = { Text("Pratinjau Native Konten") },
-            text = {
+    // Glowing Orb Delivery Modal matching App.tsx
+    uiState.deliveryBanner?.let { banner ->
+        Dialog(onDismissRequest = onDismissBanner) {
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.padding(22.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Subjek: ${uiState.subjectInput.ifBlank { "(Belum diisi)" }}",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
-                    )
-                    Surface(
-                        color = Color(0xFFF8FAFC),
-                        shape = RoundedCornerShape(12.dp)
+                    Box(
+                        modifier = Modifier
+                            .size(74.dp)
+                            .clip(CircleShape)
+                            .background(if (banner.isSuccess) Color(0xFFECFDF5) else Color(0xFFFFF1F2))
+                            .border(
+                                3.dp,
+                                if (banner.isSuccess) EmeraldOnline else RoseError,
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = plainPreview.ifBlank { "(Konten pesan masih kosong)" },
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(12.dp)
+                        Icon(
+                            imageVector = if (banner.isSuccess) Icons.Rounded.DoneAll else Icons.Rounded.Close,
+                            contentDescription = null,
+                            tint = if (banner.isSuccess) EmeraldOnline else RoseError,
+                            modifier = Modifier.size(36.dp)
                         )
                     }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showPreviewDialog = false }) {
-                    Text("Tutup")
+
+                    Text(
+                        text = banner.subtitle,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (banner.isSuccess) EmeraldOnline else RoseError,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = banner.title,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF0F172A),
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = banner.detail,
+                        fontSize = 12.sp,
+                        color = Color(0xFF475569),
+                        textAlign = TextAlign.Center
+                    )
+
+                    banner.tip?.let { tip ->
+                        Surface(
+                            color = Color(0xFFFFF1F2),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Text(
+                                text = "Solusi: $tip",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF9F1239),
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        if (!banner.isSuccess) {
+                            OutlinedButton(
+                                onClick = {
+                                    onDismissBanner()
+                                    onGoToAccounts()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Atur SMTP", fontSize = 12.sp)
+                            }
+                        }
+                        Button(
+                            onClick = onDismissBanner,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (banner.isSuccess) EmeraldOnline else NavyPrimary
+                            )
+                        ) {
+                            Text("Tutup", fontSize = 12.sp)
+                        }
+                    }
                 }
             }
-        )
+        }
     }
 }

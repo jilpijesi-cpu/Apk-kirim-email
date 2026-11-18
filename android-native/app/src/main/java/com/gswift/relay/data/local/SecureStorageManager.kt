@@ -8,6 +8,7 @@ import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.gswift.relay.data.model.ChatMessage
 import com.gswift.relay.data.model.EmailTemplate
+import com.gswift.relay.data.model.LastSentEmail
 import com.gswift.relay.data.model.SmtpConfig
 
 class SecureStorageManager(context: Context) {
@@ -40,6 +41,15 @@ class SecureStorageManager(context: Context) {
         val raw = securePrefs.getString(KEY_SMTP_CONFIG, null) ?: return SmtpConfig()
         return runCatching { gson.fromJson(raw, SmtpConfig::class.java) }
             .getOrDefault(SmtpConfig())
+    }
+
+    fun saveLastSentEmail(item: LastSentEmail) {
+        appPrefs.edit().putString(KEY_LAST_SENT, gson.toJson(item)).apply()
+    }
+
+    fun loadLastSentEmail(): LastSentEmail? {
+        val raw = appPrefs.getString(KEY_LAST_SENT, null) ?: return null
+        return runCatching { gson.fromJson(raw, LastSentEmail::class.java) }.getOrNull()
     }
 
     fun saveTemplates(templates: List<EmailTemplate>) {
@@ -86,6 +96,7 @@ class SecureStorageManager(context: Context) {
 
     companion object {
         private const val KEY_SMTP_CONFIG = "smtp_config"
+        private const val KEY_LAST_SENT = "last_sent_email"
         private const val KEY_TEMPLATES = "email_templates"
         private const val KEY_CHAT_MESSAGES = "chat_messages"
         private const val KEY_CANCEL_LINK = "custom_cancel_link"

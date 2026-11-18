@@ -4,9 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.gswift.relay.data.model.AiProviderInfo
+import com.gswift.relay.data.model.AppPresets
 import com.gswift.relay.data.model.ChatMessage
 import com.gswift.relay.data.model.EmailTemplate
 import com.gswift.relay.data.model.KeyRotationStatusResponse
+import com.gswift.relay.data.model.LastSentEmail
 import com.gswift.relay.data.model.LogEntry
 import com.gswift.relay.data.model.LogType
 import com.gswift.relay.data.model.SmtpConfig
@@ -21,13 +23,16 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import java.util.UUID
 
 data class DeliveryBanner(
     val isSuccess: Boolean,
     val title: String,
+    val subtitle: String,
     val detail: String,
-    val tip: String? = null
+    val tip: String? = null,
+    val elapsedMs: Long = 0L
 )
 
 data class MainUiState(
@@ -41,6 +46,7 @@ data class MainUiState(
     val recipientInput: String = "",
     val subjectInput: String = "",
     val messageInput: String = "",
+    val lastSentEmail: LastSentEmail? = null,
     val isSendingEmail: Boolean = false,
     val deliveryBanner: DeliveryBanner? = null,
     val aiMessages: List<ChatMessage> = emptyList(),
@@ -74,6 +80,13 @@ class GSwiftViewModel(
 
     private fun nowTime(): String {
         val fmt = SimpleDateFormat("HH:mm:ss", Locale.forLanguageTag("id-ID"))
+        fmt.timeZone = TimeZone.getTimeZone("Asia/Jakarta")
+        return fmt.format(Date())
+    }
+
+    private fun nowShortTime(): String {
+        val fmt = SimpleDateFormat("HH:mm", Locale.forLanguageTag("id-ID"))
+        fmt.timeZone = TimeZone.getTimeZone("Asia/Jakarta")
         return fmt.format(Date())
     }
 
@@ -87,12 +100,13 @@ class GSwiftViewModel(
     private fun loadInitialData() {
         val savedSmtp = repository.loadSmtpConfig()
         val savedTemplates = repository.loadTemplates()
+        val savedLastSent = repository.loadLastSentEmail()
         val savedChat = repository.loadChatMessages().ifEmpty {
             listOf(
                 ChatMessage(
                     id = "welcome",
                     role = "model",
-                    text = "Halo! Saya Asisten AI Draf Email G-Swift Relay. Tuliskan pesan, bank, atau skenario transaksi yang ingin dirancang — draf siap langsung dipakai ke formulir Kirim.",
+                    text = "Halo! Saya Asisten AI Draf Email. Tuliskan pesan, topik, atau konsep email apa pun yang ingin Anda buat — saya akan merancang draf email HTML yang kreatif, unik, dan responsif untuk Anda!",
                     timestamp = nowTime()
                 )
             )
@@ -108,6 +122,7 @@ class GSwiftViewModel(
                 } else {
                     SmtpConnectionState.UNCONFIGURED
                 },
+                lastSentEmail = savedLastSent,
                 templates = savedTemplates,
                 aiMessages = savedChat,
                 customCancelLink = cancelLink,
@@ -165,11 +180,23 @@ class GSwiftViewModel(
         }
     }
 
+    fun applyLastSentEmail() {
+        val last = _uiState.value.lastSentEmail ?: return
+        _uiState.update {
+            it.copy(
+                recipientInput = last.to,
+                subjectInput = last.subject.ifBlank { it.subjectInput },
+                snackbarMessage = "Memuat kembali: ${last.to}"
+            )
+        }
+        addLog(LogType.INFO, "Memuat kembali email terakhir: ${last.to}")
+    }
+
     fun clearMailForm() {
         _uiState.update {
             it.copy(recipientInput = "", subjectInput = "", messageInput = "", deliveryBanner = null)
         }
-        addLog(LogType.INFO, "Formulir email dibersihkan.")
+        addLog(LogType.INFO, "Formulir pengiriman email dibersihkan.")
     }
 
     fun dismissDeliveryBanner() {
@@ -180,9 +207,28 @@ class GSwiftViewModel(
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
+    /**
+     * 1:1 Auto-Filter extraction matching App.tsx extractEmailAddresses()
+     */
     fun extractCleanEmails(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        val sanitized = raw
+            .replace(Regex("mailto:\\s*", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("%40", RegexOption.IGNORE_CASE), "@")
+            .replace(Regex("\\[([^\\]]+)]\\(([^)]+)\\)"), "$1 $2")
+
         val regex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,63}")
-        return regex.findAll(raw).map { it.value.lowercase() }.distinct().toList()
+        val list = mutableListOf<String>()
+        regex.findAll(sanitized).forEach { match ->
+            val clean = match.value.trim().lowercase()
+            val domain = clean.substringAfter("@", "")
+            if (domain.isNotEmpty() && !domain.startsWith("-") && !domain.endsWith("-") && !domain.contains("..")) {
+                if (!list.contains(clean)) {
+                    list.add(clean)
+                }
+            }
+        }
+        return list
     }
 
     fun sendEmail() {
@@ -193,26 +239,27 @@ class GSwiftViewModel(
         }
         val cleanEmails = extractCleanEmails(state.recipientInput)
         if (cleanEmails.isEmpty()) {
-            _uiState.update { it.copy(snackbarMessage = "Masukkan minimal 1 alamat email penerima yang valid.") }
+            _uiState.update { it.copy(snackbarMessage = "Masukkan minimal satu alamat email penerima yang valid.") }
             return
         }
         if (state.subjectInput.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Subjek email wajib diisi.") }
+            _uiState.update { it.copy(snackbarMessage = "Silakan masukkan subjek email.") }
             return
         }
         if (state.messageInput.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Isi pesan atau HTML draf email wajib diisi.") }
+            _uiState.update { it.copy(snackbarMessage = "Silakan lengkapi pesan draf email sebelum mengirim.") }
             return
         }
         if (state.smtpConfig.username.isBlank() || state.smtpConfig.password.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Lengkapi akun SMTP di tab Akun terlebih dahulu.") }
+            _uiState.update { it.copy(snackbarMessage = "Konfigurasi akun pengirim SMTP di tab Akun terlebih dahulu.") }
             return
         }
 
         viewModelScope.launch {
+            val startMs = System.currentTimeMillis()
             _uiState.update { it.copy(isSendingEmail = true, deliveryBanner = null) }
             val joinedRecipients = cleanEmails.joinToString(", ")
-            addLog(LogType.INFO, "Mengirim email ke $joinedRecipients...")
+            addLog(LogType.INFO, "Memulai pengiriman paket ke $joinedRecipients...")
 
             repository.sendEmail(
                 to = joinedRecipients,
@@ -220,31 +267,50 @@ class GSwiftViewModel(
                 htmlOrText = state.messageInput,
                 config = state.smtpConfig
             ).onSuccess { resp ->
-                addLog(LogType.SUCCESS, "Email terkirim! ID: ${resp.messageId ?: "-"}")
+                val elapsed = System.currentTimeMillis() - startMs
+                val lastItem = LastSentEmail(
+                    to = joinedRecipients,
+                    subject = state.subjectInput,
+                    timestamp = nowShortTime()
+                )
+                repository.saveLastSentEmail(lastItem)
+                addLog(LogType.SUCCESS, "Email terkirim dalam ${elapsed}ms! ID: ${resp.messageId ?: "-"}")
                 _uiState.update {
                     it.copy(
                         isSendingEmail = false,
+                        smtpState = SmtpConnectionState.CONNECTED,
+                        lastSentEmail = lastItem,
                         deliveryBanner = DeliveryBanner(
                             isSuccess = true,
-                            title = "Email Berhasil Terkirim",
-                            detail = "Penerima: $joinedRecipients\nMessage ID: ${resp.messageId ?: "Terkonfirmasi"}"
+                            title = "Pengiriman Berhasil",
+                            subtitle = "Exploit Success • Message Dispatched",
+                            detail = "Penerima: $joinedRecipients\nMessage ID: ${resp.messageId ?: "Terkonfirmasi"}\nWaktu Proses: ${elapsed}ms",
+                            elapsedMs = elapsed
                         )
                     )
                 }
             }.onFailure { err ->
+                val elapsed = System.currentTimeMillis() - startMs
                 val raw = err.message ?: "Gagal mengirim email"
-                val tip = if (raw.contains("535") || raw.contains("App Password", ignoreCase = true)) {
-                    "Gunakan 16 karakter Sandi Aplikasi (App Password) Google tanpa spasi dari myaccount.google.com/apppasswords."
-                } else null
-                addLog(LogType.ERROR, "Pengiriman gagal: $raw")
+                val tip = when {
+                    raw.contains("535") || raw.contains("App Password", ignoreCase = true) || raw.contains("BadCredentials", ignoreCase = true) ->
+                        "Server SMTP menolak sandi. Untuk Gmail/Yahoo, aktifkan Verifikasi 2 Langkah lalu buat 16 karakter Sandi Aplikasi tanpa spasi di myaccount.google.com/apppasswords."
+                    raw.contains("timeout", ignoreCase = true) || raw.contains("ECONNREFUSED", ignoreCase = true) ->
+                        "Port SMTP terblokir atau tidak merespons. Gunakan Port 587 (STARTTLS) atau Port 465 (SSL/TLS)."
+                    else -> null
+                }
+                addLog(LogType.ERROR, "Relay failed: $raw")
                 _uiState.update {
                     it.copy(
                         isSendingEmail = false,
+                        smtpState = SmtpConnectionState.DISCONNECTED,
                         deliveryBanner = DeliveryBanner(
                             isSuccess = false,
                             title = "Pengiriman Gagal",
+                            subtitle = "Exploit Failed • Delivery Interrupted",
                             detail = raw,
-                            tip = tip
+                            tip = tip,
+                            elapsedMs = elapsed
                         )
                     )
                 }
@@ -263,12 +329,12 @@ class GSwiftViewModel(
                 htmlOrText = template.message,
                 config = state.smtpConfig
             ).onSuccess {
-                addLog(LogType.SUCCESS, "Email uji coba '${template.name}' terkirim ke $targetEmail.")
+                addLog(LogType.SUCCESS, "[UJICOBA] Email '${template.name}' terkirim ke $targetEmail.")
                 _uiState.update {
                     it.copy(isSendingEmail = false, snackbarMessage = "Email tes terkirim ke $targetEmail")
                 }
             }.onFailure { err ->
-                addLog(LogType.ERROR, "Email uji coba gagal: ${err.message}")
+                addLog(LogType.ERROR, "[UJICOBA GAGAL] ${err.message}")
                 _uiState.update {
                     it.copy(isSendingEmail = false, snackbarMessage = "Gagal: ${err.message}")
                 }
@@ -454,13 +520,32 @@ class GSwiftViewModel(
     }
 
     fun updateSmtpConfig(config: SmtpConfig) {
-        _uiState.update { it.copy(smtpConfig = config) }
+        val preset = AppPresets.getSmartSmtpPreset(config.username)
+        val merged = if (preset != null && config.host.isBlank()) {
+            config.copy(
+                host = preset.host,
+                port = preset.port,
+                connectionType = preset.connectionType,
+                dailyLimit = preset.dailyLimit
+            )
+        } else {
+            config
+        }
+        _uiState.update { it.copy(smtpConfig = merged) }
     }
 
     fun saveAndVerifySmtp(config: SmtpConfig) {
-        repository.saveSmtpConfig(config)
-        _uiState.update { it.copy(smtpConfig = config) }
-        verifySmtpConnection(config, silent = false)
+        val preset = AppPresets.getSmartSmtpPreset(config.username)
+        val normalized = config.copy(
+            host = config.host.ifBlank { preset?.host ?: "smtp.gmail.com" },
+            port = config.port.ifBlank { preset?.port ?: "587" },
+            username = config.username.trim(),
+            senderEmail = config.senderEmail.ifBlank { config.username.trim() },
+            password = config.password.replace(Regex("[\\s\\u00A0]+"), "").trim()
+        )
+        repository.saveSmtpConfig(normalized)
+        _uiState.update { it.copy(smtpConfig = normalized) }
+        verifySmtpConnection(normalized, silent = false)
     }
 
     fun verifySmtpConnection(config: SmtpConfig = _uiState.value.smtpConfig, silent: Boolean = false) {

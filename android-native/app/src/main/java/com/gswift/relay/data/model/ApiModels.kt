@@ -3,15 +3,36 @@ package com.gswift.relay.data.model
 import com.google.gson.annotations.SerializedName
 
 data class SmtpConfig(
-    val host: String = "smtp.gmail.com",
-    val port: String = "465",
+    val host: String = "",
+    val port: String = "",
     val username: String = "",
     val password: String = "",
     val senderEmail: String = "",
     val fromName: String = "",
     val replyTo: String = "",
-    val dailyLimit: String = "200",
-    val connectionType: String = "SSL_TLS"
+    val dailyLimit: String = "500",
+    val connectionType: String = "STARTTLS"
+)
+
+data class ClientDateTime(
+    val day: String,
+    val monthShort: String,
+    val monthFull: String,
+    val year: Int,
+    val hours: String,
+    val minutes: String,
+    val seconds: String,
+    val dateShort: String,
+    val dateFull: String,
+    val timeShort: String,
+    val timeFull: String,
+    val dateTimeShort: String
+)
+
+data class LastSentEmail(
+    val to: String,
+    val subject: String,
+    val timestamp: String
 )
 
 data class SendEmailRequest(
@@ -20,6 +41,8 @@ data class SendEmailRequest(
     val text: String,
     val html: String,
     val smtpConfig: SmtpConfig,
+    val clientDateTime: ClientDateTime? = null,
+    val clientRef: String? = null,
     val clientTimezone: String = "Asia/Jakarta"
 )
 
@@ -150,7 +173,7 @@ data class ChatAiResponse(
 
 data class ChatMessage(
     val id: String,
-    val role: String, // "user" or "model"
+    val role: String,
     val text: String,
     val timestamp: String,
     val usedModel: String? = null,
@@ -183,7 +206,8 @@ enum class SmtpConnectionState {
 data class BankOption(
     val key: String,
     val label: String,
-    val colorHex: Long
+    val colorHex: Long,
+    val refPrefix: String
 )
 
 data class ScenarioOption(
@@ -192,21 +216,29 @@ data class ScenarioOption(
     val promptTemplate: (String) -> String
 )
 
+data class SmartSmtpPreset(
+    val name: String,
+    val host: String,
+    val port: String,
+    val connectionType: String,
+    val dailyLimit: String
+)
+
 object AppPresets {
     val banks = listOf(
-        BankOption("bca", "BCA", 0xFF005BAA),
-        BankOption("mandiri", "Mandiri", 0xFF003A8F),
-        BankOption("bri", "BRI", 0xFF00529C),
-        BankOption("bni", "BNI", 0xFF005E6A),
-        BankOption("cimb", "CIMB Niaga", 0xFF8B0000),
-        BankOption("uob", "UOB", 0xFF00205B)
+        BankOption("bca", "BCA", 0xFF005BAA, "BCA"),
+        BankOption("mandiri", "Mandiri", 0xFF003A8F, "MDR"),
+        BankOption("bri", "BRI", 0xFF00529C, "BRI"),
+        BankOption("bni", "BNI", 0xFF005E6A, "BNI"),
+        BankOption("cimb", "CIMB Niaga", 0xFF8B0000, "CIMB"),
+        BankOption("uob", "UOB", 0xFF00205B, "UOB")
     )
 
     val scenarios = listOf(
-        ScenarioOption("payment", "Pembayaran") { bank ->
+        ScenarioOption("payment", "Payment") { bank ->
             "Buatkan bukti pembayaran transaksi kartu kredit $bank untuk SHOPEE INDONESIA nominal Rp 5.000.000"
         },
-        ScenarioOption("transfer", "Transfer BI-Fast") { bank ->
+        ScenarioOption("transfer", "Transfer") { bank ->
             "Buatkan bukti transfer dana BI-Fast $bank ke SHOPEE INDONESIA nominal Rp 5.000.000"
         },
         ScenarioOption("refund", "Refund") { bank ->
@@ -219,4 +251,39 @@ object AppPresets {
             "Buatkan bukti tarik tunai kartu kredit $bank di ATM nominal Rp 5.000.000"
         }
     )
+
+    fun detectBankKey(text: String): String {
+        val lower = text.lowercase()
+        return when {
+            Regex("""\b(mandiri|livin|mdr)\b""").containsMatchIn(lower) -> "mandiri"
+            Regex("""\b(bri|brimo)\b""").containsMatchIn(lower) -> "bri"
+            Regex("""\b(bni|wondr)\b""").containsMatchIn(lower) -> "bni"
+            Regex("""\b(cimb|octo|niaga)\b""").containsMatchIn(lower) -> "cimb"
+            Regex("""\b(uob|tmrw)\b""").containsMatchIn(lower) -> "uob"
+            else -> "bca"
+        }
+    }
+
+    fun getSmartSmtpPreset(email: String): SmartSmtpPreset? {
+        if (!email.contains("@")) return null
+        val domain = email.substringAfter("@").lowercase().trim()
+        if (domain.isBlank()) return null
+        return when {
+            domain == "gmail.com" || domain == "googlemail.com" ->
+                SmartSmtpPreset("Google Mail (Gmail)", "smtp.gmail.com", "587", "STARTTLS", "500")
+            domain.endsWith("yahoo.com") || domain == "ymail.com" || domain == "yahoo.co.id" ->
+                SmartSmtpPreset("Yahoo Mail", "smtp.mail.yahoo.com", "465", "SSL_TLS", "500")
+            domain == "outlook.com" || domain == "hotmail.com" || domain == "live.com" || domain == "live.co.id" ->
+                SmartSmtpPreset("Microsoft Outlook", "smtp-mail.outlook.com", "587", "STARTTLS", "300")
+            domain == "icloud.com" ->
+                SmartSmtpPreset("Apple iCloud", "smtp.mail.me.com", "587", "STARTTLS", "500")
+            domain == "zoho.com" ->
+                SmartSmtpPreset("Zoho Mail", "smtp.zoho.com", "465", "SSL_TLS", "150")
+            domain == "yandex.com" || domain == "yandex.ru" ->
+                SmartSmtpPreset("Yandex Mail", "smtp.yandex.com", "465", "SSL_TLS", "150")
+            domain == "hostinger.com" || domain == "hostinger.co.id" ->
+                SmartSmtpPreset("Hostinger Email", "smtp.hostinger.com", "465", "SSL_TLS", "1000")
+            else -> null
+        }
+    }
 }

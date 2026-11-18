@@ -10,8 +10,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,8 +23,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
@@ -31,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,11 +52,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gswift.relay.data.model.AppPresets
 import com.gswift.relay.data.model.ChatMessage
+import com.gswift.relay.ui.theme.ClaudeStarburstLogo
 import com.gswift.relay.ui.theme.ClaudeTerracotta
 import com.gswift.relay.ui.theme.ClaudeWarmBg
 import com.gswift.relay.ui.theme.NavyPrimary
@@ -61,6 +67,7 @@ import com.gswift.relay.ui.viewmodel.MainUiState
 @Composable
 fun AiChatScreen(
     uiState: MainUiState,
+    onBackToSend: () -> Unit,
     onSendPrompt: (String) -> Unit,
     onSelectBank: (String) -> Unit,
     onSelectScenario: (String) -> Unit,
@@ -88,50 +95,70 @@ fun AiChatScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(ClaudeWarmBg)
+            .navigationBarsPadding()
+            .imePadding()
     ) {
-        // AI Controls Header Bar
+        // Full-Screen Claude Mythos Header matching App.tsx AI tab
         Surface(color = Color.White, shadowElevation = 1.dp) {
-            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Column(
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Box {
-                        OutlinedButton(
-                            onClick = { showModelMenu = true },
-                            shape = RoundedCornerShape(10.dp)
-                        ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onBackToSend) {
                             Icon(
-                                Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = ClaudeTerracotta,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = uiState.selectedAiModel ?: "Auto Provider",
-                                fontSize = 12.sp,
-                                maxLines = 1
+                                Icons.AutoMirrored.Rounded.ArrowBack,
+                                contentDescription = "Kembali ke Kirim",
+                                tint = Color(0xFF451A03)
                             )
                         }
-                        DropdownMenu(
-                            expanded = showModelMenu,
-                            onDismissRequest = { showModelMenu = false }
-                        ) {
-                            allModels.forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model, fontSize = 13.sp) },
-                                    onClick = {
-                                        onSelectModel(model)
-                                        showModelMenu = false
-                                    }
-                                )
-                            }
-                        }
+                        ClaudeStarburstLogo(
+                            modifier = Modifier.size(22.dp),
+                            animated = uiState.isAiThinking
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "Claude Mythos",
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = Color(0xFF451A03)
+                        )
                     }
 
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box {
+                            OutlinedButton(
+                                onClick = { showModelMenu = true },
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text(
+                                    text = (uiState.selectedAiModel ?: "Auto").substringAfterLast("/").take(14),
+                                    fontSize = 11.sp,
+                                    maxLines = 1
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showModelMenu,
+                                onDismissRequest = { showModelMenu = false }
+                            ) {
+                                allModels.forEach { model ->
+                                    DropdownMenuItem(
+                                        text = { Text(model, fontSize = 13.sp) },
+                                        onClick = {
+                                            onSelectModel(model)
+                                            showModelMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                         IconButton(onClick = { showRulesDialog = true }) {
                             Icon(Icons.Rounded.Tune, contentDescription = "Aturan AI")
                         }
@@ -177,6 +204,7 @@ fun AiChatScreen(
                 }
             }
         }
+        HorizontalDivider(color = Color(0xFFE7E5E4))
 
         LazyColumn(
             state = listState,
@@ -296,6 +324,7 @@ private fun ChatBubble(
     onApplyDraft: (subject: String?, htmlOrBody: String) -> Unit
 ) {
     val isUser = message.role == "user"
+    val htmlDraft = message.extractedHtml
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
@@ -320,9 +349,9 @@ private fun ChatBubble(
                     fontSize = 13.sp,
                     color = if (isUser) Color.White else MaterialTheme.colorScheme.onSurface
                 )
-                if (!isUser && !message.extractedHtml.isNullOrBlank()) {
+                if (!isUser && !htmlDraft.isNullOrBlank()) {
                     Button(
-                        onClick = { onApplyDraft(message.extractedSubject, message.extractedHtml) },
+                        onClick = { onApplyDraft(message.extractedSubject, htmlDraft) },
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary),
                         modifier = Modifier.fillMaxWidth()
