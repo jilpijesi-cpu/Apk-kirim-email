@@ -14,19 +14,30 @@ val NavyPrimary = Color(0xFF003A8F)
 val NavyDark = Color(0xFF001D47)
 val NavyContainer = Color(0xFFD8E6FF)
 val GoldAccent = Color(0xFFF2A900)
-val ClaudeTerracotta = Color(0xFFD97757)
+val ClaudeTerracotta = Color(0xFFCC5A36)
 val ClaudeWarmBg = Color(0xFFFAF9F5)
 val EmeraldOnline = Color(0xFF059669)
 val RoseError = Color(0xFFE11D48)
 val SlateSurface = Color(0xFFF8FAFC)
 val SlateBorder = Color(0xFFE2E8F0)
 
+// Exact gradient matching App.tsx: bg-gradient-to-b from-mandiri-blue-400 via-mandiri-blue-50 to-mandiri-gray-bg
 val AppSkyGradient = Brush.verticalGradient(
     colors = listOf(
-        Color(0xFFBEE0FF),
-        Color(0xFFDCEEFF),
-        Color(0xFFF6FAFF),
+        Color(0xFF88C8FA),
+        Color(0xFFD5ECFF),
+        Color(0xFFF5F9FE),
         Color(0xFFFFFFFF)
+    )
+)
+
+// Exact AI tab gradient matching App.tsx: linear-gradient(180deg, #FAF9F5 0%, #F4F7FB 35%, #D7EBFD 70%, #9BCFFA 100%)
+val AiMythosGradient = Brush.verticalGradient(
+    colorStops = arrayOf(
+        0.0f to Color(0xFFFAF9F5),
+        0.35f to Color(0xFFF4F7FB),
+        0.70f to Color(0xFFD7EBFD),
+        1.0f to Color(0xFF9BCFFA)
     )
 )
 

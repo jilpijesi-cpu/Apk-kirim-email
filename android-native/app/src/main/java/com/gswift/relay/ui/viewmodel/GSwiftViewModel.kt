@@ -13,8 +13,13 @@ import com.gswift.relay.data.model.LogEntry
 import com.gswift.relay.data.model.LogType
 import com.gswift.relay.data.model.SmtpConfig
 import com.gswift.relay.data.model.SmtpConnectionState
+import com.gswift.relay.data.model.SmtpDiagnosticResult
+import com.gswift.relay.data.model.SmtpLookupInfo
 import com.gswift.relay.data.network.ConnectivityObserver
 import com.gswift.relay.data.repository.GSwiftRepository
+import com.gswift.relay.data.util.BankDraftEngine
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -35,23 +40,34 @@ data class DeliveryBanner(
     val elapsedMs: Long = 0L
 )
 
+data class PasteFeedback(
+    val isError: Boolean,
+    val message: String,
+    val details: String
+)
+
 data class MainUiState(
     val isOnline: Boolean = true,
     val backendOnline: Boolean = false,
+    val serverBaseUrl: String = "",
     val smtpConfig: SmtpConfig = SmtpConfig(),
     val smtpState: SmtpConnectionState = SmtpConnectionState.UNCONFIGURED,
     val smtpStatusMessage: String = "Belum dikonfigurasi",
     val isVerifyingSmtp: Boolean = false,
     val isLookingUpDomain: Boolean = false,
+    val detectedLookupInfo: SmtpLookupInfo? = null,
+    val autoDetectSmtp: Boolean = true,
     val recipientInput: String = "",
     val subjectInput: String = "",
     val messageInput: String = "",
+    val pasteFeedback: PasteFeedback? = null,
     val lastSentEmail: LastSentEmail? = null,
     val isSendingEmail: Boolean = false,
+    val sendErrorInline: String? = null,
     val deliveryBanner: DeliveryBanner? = null,
     val aiMessages: List<ChatMessage> = emptyList(),
     val aiProviders: List<AiProviderInfo> = emptyList(),
-    val selectedAiModel: String? = null,
+    val selectedAiModel: String? = "Claude Mythos",
     val selectedBankKey: String = "bca",
     val selectedScenario: String = "payment",
     val customCancelLink: String = "",
@@ -62,7 +78,15 @@ data class MainUiState(
     val keyRotationStatus: KeyRotationStatusResponse? = null,
     val isRefreshingKeys: Boolean = false,
     val snackbarMessage: String? = null
-)
+) {
+    val smtpDiagnostic: SmtpDiagnosticResult
+        get() = BankDraftEngine.computeSmtpDiagnostic(
+            smtpConfig = smtpConfig,
+            smtpState = smtpState,
+            smtpStatusMessage = smtpStatusMessage,
+            logs = logs
+        )
+}
 
 class GSwiftViewModel(
     private val repository: GSwiftRepository,
@@ -71,6 +95,8 @@ class GSwiftViewModel(
 
     private val _uiState = MutableStateFlow(MainUiState())
     val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    private var domainLookupJob: Job? = null
 
     init {
         loadInitialData()
@@ -90,7 +116,7 @@ class GSwiftViewModel(
         return fmt.format(Date())
     }
 
-    private fun addLog(type: LogType, message: String) {
+    fun addLog(type: LogType, message: String) {
         val entry = LogEntry(timestamp = nowTime(), type = type, message = message)
         _uiState.update { state ->
             state.copy(logs = (listOf(entry) + state.logs).take(150))
@@ -101,21 +127,14 @@ class GSwiftViewModel(
         val savedSmtp = repository.loadSmtpConfig()
         val savedTemplates = repository.loadTemplates()
         val savedLastSent = repository.loadLastSentEmail()
-        val savedChat = repository.loadChatMessages().ifEmpty {
-            listOf(
-                ChatMessage(
-                    id = "welcome",
-                    role = "model",
-                    text = "Halo! Saya Asisten AI Draf Email. Tuliskan pesan, topik, atau konsep email apa pun yang ingin Anda buat — saya akan merancang draf email HTML yang kreatif, unik, dan responsif untuk Anda!",
-                    timestamp = nowTime()
-                )
-            )
-        }
+        val savedChat = repository.loadChatMessages().filterNot { it.id == "welcome" }
         val cancelLink = repository.loadCustomCancelLink()
         val dataRules = repository.loadCustomDataRules()
+        val baseUrl = repository.loadServerBaseUrl()
 
         _uiState.update {
             it.copy(
+                serverBaseUrl = baseUrl,
                 smtpConfig = savedSmtp,
                 smtpState = if (savedSmtp.username.isNotBlank() && savedSmtp.password.isNotBlank()) {
                     SmtpConnectionState.CHECKING
@@ -151,7 +170,7 @@ class GSwiftViewModel(
         viewModelScope.launch {
             repository.checkHealth().onSuccess {
                 _uiState.update { state -> state.copy(backendOnline = true) }
-                addLog(LogType.SUCCESS, "Terhubung ke backend G-Swift Relay (${it.environment}).")
+                addLog(LogType.SUCCESS, "Koneksi Relay terjalin dengan server (${it.environment}).")
             }.onFailure { err ->
                 _uiState.update { state -> state.copy(backendOnline = false) }
                 addLog(LogType.ERROR, "Backend tidak terjangkau: ${err.message}")
@@ -171,14 +190,133 @@ class GSwiftViewModel(
         }
     }
 
-    fun updateMailFields(to: String? = null, subject: String? = null, message: String? = null) {
+    fun updateServerBaseUrl(url: String, testNow: Boolean = true) {
+        repository.saveServerBaseUrl(url)
+        val saved = repository.loadServerBaseUrl()
         _uiState.update {
             it.copy(
-                recipientInput = to ?: it.recipientInput,
-                subjectInput = subject ?: it.subjectInput,
-                messageInput = message ?: it.messageInput
+                serverBaseUrl = saved,
+                snackbarMessage = "URL Server Relay diperbarui: $saved"
             )
         }
+        addLog(LogType.INFO, "Server Relay API diubah ke: $saved")
+        if (testNow) {
+            checkHealthAndProviders()
+        }
+    }
+
+    fun updateMailFields(to: String? = null, subject: String? = null, message: String? = null) {
+        _uiState.update {
+            val nextTo = to ?: it.recipientInput
+            it.copy(
+                recipientInput = nextTo,
+                subjectInput = subject ?: it.subjectInput,
+                messageInput = message ?: it.messageInput,
+                sendErrorInline = null,
+                pasteFeedback = if (to != null && to.isBlank()) null else it.pasteFeedback
+            )
+        }
+    }
+
+    fun handleRecipientPasteOrClean(pastedText: String) {
+        val extracted = BankDraftEngine.extractEmailAddresses(pastedText)
+        if (extracted.isNotEmpty()) {
+            val cleaned = extracted.joinToString(", ")
+            _uiState.update {
+                it.copy(
+                    recipientInput = cleaned,
+                    pasteFeedback = PasteFeedback(
+                        isError = false,
+                        message = "${extracted.size} Alamat Email Berhasil Disaring & Diterapkan!",
+                        details = cleaned
+                    )
+                )
+            }
+            addLog(LogType.INFO, "Auto-Filter: ${extracted.size} email disaring ($cleaned)")
+        } else {
+            _uiState.update {
+                it.copy(
+                    pasteFeedback = PasteFeedback(
+                        isError = true,
+                        message = "Teks Tidak Mengandung Format Email Valid!",
+                        details = "Pastikan teks memuat alamat seperti nama@domain.com."
+                    )
+                )
+            }
+            addLog(LogType.WARNING, "Peringatan Tempel: Tidak ditemukan format email valid.")
+        }
+    }
+
+    fun cleanCurrentRecipientInput() {
+        val extracted = BankDraftEngine.extractEmailAddresses(_uiState.value.recipientInput)
+        if (extracted.isNotEmpty()) {
+            val cleaned = extracted.joinToString(", ")
+            _uiState.update {
+                it.copy(
+                    recipientInput = cleaned,
+                    pasteFeedback = PasteFeedback(
+                        isError = false,
+                        message = "Alamat email berhasil dibersihkan dari teks tambahan!",
+                        details = cleaned
+                    )
+                )
+            }
+            addLog(LogType.INFO, "Auto-filter: ${extracted.size} email dibersihkan ($cleaned)")
+        }
+    }
+
+    fun dismissPasteFeedback() {
+        _uiState.update { it.copy(pasteFeedback = null) }
+    }
+
+    fun dismissSendErrorInline() {
+        _uiState.update { it.copy(sendErrorInline = null) }
+    }
+
+    fun syncSendDraftTime() {
+        val state = _uiState.value
+        if (state.messageInput.isBlank() && state.subjectInput.isBlank()) return
+        val nowMillis = System.currentTimeMillis()
+        val updatedMsg = if (state.messageInput.isNotBlank()) {
+            BankDraftEngine.synchronizeDateTimeInHtml(state.messageInput, nowMillis)
+        } else state.messageInput
+        val dt = BankDraftEngine.buildWibDateTime(nowMillis)
+        val updatedSubj = state.subjectInput
+            .replace(Regex("""\[(?:TANGGAL_TRANSAKSI|TGL_TRANSAKSI|TANGGAL_WAKTU|TGL_WAKTU|DATETIME|TANGGAL_DAN_WAKTU)]""", RegexOption.IGNORE_CASE), dt.dateTimeShort)
+            .replace(Regex("""\[(?:TANGGAL|TGL|DATE)]""", RegexOption.IGNORE_CASE), dt.dateShort)
+            .replace(Regex("""\[(?:WAKTU_TRANSAKSI|JAM_TRANSAKSI|WAKTU|JAM|TIME)]""", RegexOption.IGNORE_CASE), dt.timeShort)
+
+        if (updatedMsg != state.messageInput || updatedSubj != state.subjectInput) {
+            _uiState.update { it.copy(messageInput = updatedMsg, subjectInput = updatedSubj) }
+        }
+    }
+
+    fun applyBankToSendDraft(bankKey: String, resetBlank: Boolean = false) {
+        val state = _uiState.value
+        val result = BankDraftEngine.applyFreshBankTemplate(
+            html = if (resetBlank) "" else state.messageInput,
+            targetBankKey = bankKey,
+            customCancelLink = state.customCancelLink,
+            forceNewBlank = resetBlank
+        )
+        val updatedSubj = state.subjectInput.ifBlank {
+            "Konfirmasi Transaksi Resmi Bank ${result.appliedBank.label} (Ref: ${result.newReference})"
+        }.let { subj ->
+            var s = subj
+            AppPresets.banks.filter { it.key != result.appliedBank.key }.forEach { other ->
+                s = s.replace(Regex("\\b${Regex.escape(other.label)}\\b"), result.appliedBank.label)
+            }
+            BankDraftEngine.synchronizeSubject(s, result.newReference)
+        }
+        _uiState.update {
+            it.copy(
+                selectedBankKey = result.appliedBank.key,
+                messageInput = result.html,
+                subjectInput = updatedSubj,
+                snackbarMessage = "Identitas Bank ${result.appliedBank.label} diterapkan (Ref: ${result.newReference})"
+            )
+        }
+        addLog(LogType.SUCCESS, "Smart Bank Template: ${result.appliedBank.fullName} (Ref baru: ${result.newReference})")
     }
 
     fun applyLastSentEmail() {
@@ -195,7 +333,14 @@ class GSwiftViewModel(
 
     fun clearMailForm() {
         _uiState.update {
-            it.copy(recipientInput = "", subjectInput = "", messageInput = "", deliveryBanner = null)
+            it.copy(
+                recipientInput = "",
+                subjectInput = "",
+                messageInput = "",
+                sendErrorInline = null,
+                pasteFeedback = null,
+                deliveryBanner = null
+            )
         }
         addLog(LogType.INFO, "Formulir pengiriman email dibersihkan.")
     }
@@ -208,65 +353,61 @@ class GSwiftViewModel(
         _uiState.update { it.copy(snackbarMessage = null) }
     }
 
-    /**
-     * 1:1 Auto-Filter extraction matching App.tsx extractEmailAddresses()
-     */
-    fun extractCleanEmails(raw: String): List<String> {
-        if (raw.isBlank()) return emptyList()
-        val sanitized = raw
-            .replace(Regex("mailto:\\s*", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("%40", RegexOption.IGNORE_CASE), "@")
-            .replace(Regex("\\[([^\\]]+)]\\(([^)]+)\\)"), "$1 $2")
-
-        val regex = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,63}")
-        val list = mutableListOf<String>()
-        regex.findAll(sanitized).forEach { match ->
-            val clean = match.value.trim().lowercase()
-            val domain = clean.substringAfter("@", "")
-            if (domain.isNotEmpty() && !domain.startsWith("-") && !domain.endsWith("-") && !domain.contains("..")) {
-                if (!list.contains(clean)) {
-                    list.add(clean)
-                }
-            }
-        }
-        return list
-    }
+    fun extractCleanEmails(raw: String): List<String> = BankDraftEngine.extractEmailAddresses(raw)
 
     fun sendEmail() {
         val state = _uiState.value
         if (!state.isOnline) {
-            _uiState.update { it.copy(snackbarMessage = "Tidak ada koneksi internet.") }
+            _uiState.update { it.copy(sendErrorInline = "Tidak ada koneksi internet.", snackbarMessage = "Tidak ada koneksi internet.") }
             return
         }
         val cleanEmails = extractCleanEmails(state.recipientInput)
         if (cleanEmails.isEmpty()) {
-            _uiState.update { it.copy(snackbarMessage = "Masukkan minimal satu alamat email penerima yang valid.") }
+            val msg = "Silakan masukkan minimal satu alamat email penerima yang valid."
+            _uiState.update { it.copy(sendErrorInline = msg) }
+            addLog(LogType.WARNING, msg)
             return
         }
         if (state.subjectInput.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Silakan masukkan subjek email.") }
+            val msg = "Silakan masukkan subjek email."
+            _uiState.update { it.copy(sendErrorInline = msg) }
+            addLog(LogType.WARNING, msg)
             return
         }
         if (state.messageInput.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Silakan lengkapi pesan draf email sebelum mengirim.") }
+            val msg = "Silakan lengkapi pesan draf email sebelum mengirim."
+            _uiState.update { it.copy(sendErrorInline = msg) }
+            addLog(LogType.WARNING, msg)
             return
         }
         if (state.smtpConfig.username.isBlank() || state.smtpConfig.password.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Konfigurasi akun pengirim SMTP di tab Akun terlebih dahulu.") }
+            val msg = "Konfigurasi akun pengirim SMTP di tab Akun terlebih dahulu."
+            _uiState.update { it.copy(sendErrorInline = msg) }
+            addLog(LogType.WARNING, msg)
+            return
+        }
+
+        val passCheck = BankDraftEngine.validateAppPassword(state.smtpConfig.password, state.smtpConfig.username)
+        if (passCheck.isGmailOrYahoo && !passCheck.isExact16) {
+            val errMsg = "Pengiriman dibatalkan: App Password Gmail/Yahoo harus tepat 16 karakter (saat ini ${passCheck.length} karakter). Perbarui di tab Akun."
+            _uiState.update { it.copy(sendErrorInline = errMsg) }
+            addLog(LogType.ERROR, errMsg)
             return
         }
 
         viewModelScope.launch {
             val startMs = System.currentTimeMillis()
-            _uiState.update { it.copy(isSendingEmail = true, deliveryBanner = null) }
+            val dt = BankDraftEngine.buildWibDateTime(startMs)
+            _uiState.update { it.copy(isSendingEmail = true, deliveryBanner = null, sendErrorInline = null) }
             val joinedRecipients = cleanEmails.joinToString(", ")
-            addLog(LogType.INFO, "Memulai pengiriman paket ke $joinedRecipients...")
+            addLog(LogType.INFO, "Memulai pengiriman paket ke $joinedRecipients (${state.smtpConfig.host}:${state.smtpConfig.port}) | ${dt.dateTimeShort}...")
 
             repository.sendEmail(
                 to = joinedRecipients,
                 subject = state.subjectInput,
                 htmlOrText = state.messageInput,
-                config = state.smtpConfig
+                config = state.smtpConfig,
+                customCancelLink = state.customCancelLink
             ).onSuccess { resp ->
                 val elapsed = System.currentTimeMillis() - startMs
                 val lastItem = LastSentEmail(
@@ -275,16 +416,20 @@ class GSwiftViewModel(
                     timestamp = nowShortTime()
                 )
                 repository.saveLastSentEmail(lastItem)
-                addLog(LogType.SUCCESS, "Email terkirim dalam ${elapsed}ms! ID: ${resp.messageId ?: "-"}")
+                addLog(LogType.SUCCESS, "Relay success. MessageID: ${resp.messageId ?: "-"} (${elapsed}ms)")
+                addLog(LogType.SUCCESS, "Target sistem berhasil diakses. [$joinedRecipients]")
                 _uiState.update {
                     it.copy(
                         isSendingEmail = false,
                         smtpState = SmtpConnectionState.CONNECTED,
                         lastSentEmail = lastItem,
+                        recipientInput = "",
+                        subjectInput = "",
+                        messageInput = "",
                         deliveryBanner = DeliveryBanner(
                             isSuccess = true,
-                            title = "Pengiriman Berhasil",
-                            subtitle = "Exploit Success • Message Dispatched",
+                            title = "TARGET SISTEM BERHASIL DI RETASS",
+                            subtitle = "Pengiriman Email Sukses • Message Dispatched",
                             detail = "Penerima: $joinedRecipients\nMessage ID: ${resp.messageId ?: "Terkonfirmasi"}\nWaktu Proses: ${elapsed}ms",
                             elapsedMs = elapsed
                         )
@@ -294,9 +439,11 @@ class GSwiftViewModel(
                 val elapsed = System.currentTimeMillis() - startMs
                 val raw = err.message ?: "Gagal mengirim email"
                 val tip = when {
-                    raw.contains("535") || raw.contains("App Password", ignoreCase = true) || raw.contains("BadCredentials", ignoreCase = true) ->
+                    raw.contains("cookie_check", true) || raw.contains("ais-dev", true) ->
+                        "Server dev AI Studio meminta autentikasi browser. Buka tab Akun -> Koneksi Server Relay API, lalu masukkan URL server publik Anda."
+                    raw.contains("535") || raw.contains("App Password", true) || raw.contains("BadCredentials", true) ->
                         "Server SMTP menolak sandi. Untuk Gmail/Yahoo, aktifkan Verifikasi 2 Langkah lalu buat 16 karakter Sandi Aplikasi tanpa spasi di myaccount.google.com/apppasswords."
-                    raw.contains("timeout", ignoreCase = true) || raw.contains("ECONNREFUSED", ignoreCase = true) ->
+                    raw.contains("timeout", true) || raw.contains("ECONNREFUSED", true) ->
                         "Port SMTP terblokir atau tidak merespons. Gunakan Port 587 (STARTTLS) atau Port 465 (SSL/TLS)."
                     else -> null
                 }
@@ -305,6 +452,8 @@ class GSwiftViewModel(
                     it.copy(
                         isSendingEmail = false,
                         smtpState = SmtpConnectionState.DISCONNECTED,
+                        smtpStatusMessage = raw,
+                        sendErrorInline = raw,
                         deliveryBanner = DeliveryBanner(
                             isSuccess = false,
                             title = "Pengiriman Gagal",
@@ -321,18 +470,24 @@ class GSwiftViewModel(
 
     fun sendTestEmail(targetEmail: String, template: EmailTemplate) {
         val state = _uiState.value
-        if (targetEmail.isBlank()) return
+        val cleanTarget = extractCleanEmails(targetEmail).firstOrNull() ?: targetEmail.trim()
+        if (cleanTarget.isBlank()) return
+        if (state.smtpConfig.username.isBlank() || state.smtpConfig.password.isBlank()) {
+            _uiState.update { it.copy(snackbarMessage = "Atur akun SMTP di tab Akun sebelum kirim tes.") }
+            return
+        }
         viewModelScope.launch {
             _uiState.update { it.copy(isSendingEmail = true) }
             repository.sendEmail(
-                to = targetEmail,
+                to = cleanTarget,
                 subject = template.subject,
                 htmlOrText = template.message,
-                config = state.smtpConfig
+                config = state.smtpConfig,
+                customCancelLink = state.customCancelLink
             ).onSuccess {
-                addLog(LogType.SUCCESS, "[UJICOBA] Email '${template.name}' terkirim ke $targetEmail.")
+                addLog(LogType.SUCCESS, "[UJICOBA SUKSES] Email '${template.name}' terkirim ke $cleanTarget.")
                 _uiState.update {
-                    it.copy(isSendingEmail = false, snackbarMessage = "Email tes terkirim ke $targetEmail")
+                    it.copy(isSendingEmail = false, snackbarMessage = "Email tes terkirim ke $cleanTarget")
                 }
             }.onFailure { err ->
                 addLog(LogType.ERROR, "[UJICOBA GAGAL] ${err.message}")
@@ -362,9 +517,10 @@ class GSwiftViewModel(
             it.copy(
                 customCancelLink = cancelLink,
                 customDataRules = dataRules,
-                snackbarMessage = "Aturan AI tersimpan."
+                snackbarMessage = "Aturan & Tautan AI tersimpan."
             )
         }
+        addLog(LogType.INFO, "Pengaturan AI diperbarui.")
     }
 
     fun sendAiPrompt(promptText: String) {
@@ -376,49 +532,91 @@ class GSwiftViewModel(
             return
         }
 
+        val detectedBank = AppPresets.detectBankKey(cleanPrompt)
+        val detectedScenario = AppPresets.detectScenarioKey(cleanPrompt)
+
         val userMsg = ChatMessage(
             id = UUID.randomUUID().toString(),
             role = "user",
             text = cleanPrompt,
             timestamp = nowTime()
         )
-        val updatedHistory = state.aiMessages + userMsg
-        _uiState.update { it.copy(aiMessages = updatedHistory, isAiThinking = true) }
+        val cleanHistoryBefore = state.aiMessages.filterNot { it.id == "welcome" || it.isError }
+        val updatedHistory = cleanHistoryBefore + userMsg
+        _uiState.update {
+            it.copy(
+                aiMessages = updatedHistory,
+                isAiThinking = true,
+                selectedBankKey = detectedBank,
+                selectedScenario = detectedScenario
+            )
+        }
         repository.saveChatMessages(updatedHistory)
 
         viewModelScope.launch {
             repository.sendAiChat(
                 message = cleanPrompt,
-                history = state.aiMessages,
-                model = state.selectedAiModel,
-                bankKey = state.selectedBankKey,
-                scenario = state.selectedScenario,
+                history = cleanHistoryBefore,
+                model = state.selectedAiModel ?: "Claude Mythos",
+                bankKey = detectedBank,
+                scenario = detectedScenario,
                 cancelLink = state.customCancelLink,
                 customDataRules = state.customDataRules
             ).onSuccess { resp ->
-                val rawText = resp.text ?: "Tidak ada respons dari model AI."
-                val extractedSubject = extractSubjectFromAi(rawText)
-                val extractedHtml = extractHtmlFromAi(rawText)
+                val rawText = resp.text ?: resp.error ?: "Tidak ada respons dari model AI."
+                if (resp.text == null && resp.error != null) {
+                    val errMsg = ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        role = "model",
+                        text = resp.error,
+                        timestamp = nowTime(),
+                        isError = true
+                    )
+                    val nextMessages = _uiState.value.aiMessages + errMsg
+                    _uiState.update { it.copy(aiMessages = nextMessages, isAiThinking = false) }
+                    return@onSuccess
+                }
 
-                if (resp.rotationActive) {
-                    addLog(LogType.WARNING, "Rotasi API Key AI aktif (${resp.usedModel ?: "Auto"}).")
+                val parsed = BankDraftEngine.parseMessageContent(rawText)
+                val syncedHtml = if (parsed.html.isNotBlank()) {
+                    val ref = BankDraftEngine.generateUniqueBankReference(detectedBank)
+                    BankDraftEngine.synchronizeDynamicFieldsInHtml(parsed.html, ref, refreshRef = true)
+                } else null
+
+                val rotationNote = resp.rotationEvents
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(", ") { "${it.from} → ${it.to}" }
+
+                if (resp.rotationActive || resp.rotationEvents.isNotEmpty()) {
+                    addLog(LogType.WARNING, "Rotasi Otomatis AI aktif (${rotationNote ?: resp.usedModel ?: "Auto"}). ")
                 } else {
-                    addLog(LogType.SUCCESS, "AI selesai merancang draf (${resp.usedModel ?: "Model"}).")
+                    addLog(LogType.SUCCESS, "AI selesai merancang draf (${resp.usedModel ?: "Claude Mythos"}).")
                 }
 
                 val aiMsg = ChatMessage(
                     id = UUID.randomUUID().toString(),
                     role = "model",
-                    text = rawText,
+                    text = parsed.text.ifBlank { if (!syncedHtml.isNullOrBlank()) "Draf email HTML siap digunakan." else rawText },
                     timestamp = nowTime(),
-                    usedModel = resp.usedModel,
-                    extractedSubject = extractedSubject,
-                    extractedHtml = extractedHtml
+                    usedModel = resp.usedModel ?: "Claude Mythos",
+                    rotationNote = rotationNote,
+                    extractedSubject = parsed.subject.ifBlank { null },
+                    extractedHtml = syncedHtml
                 )
                 val nextMessages = _uiState.value.aiMessages + aiMsg
                 repository.saveChatMessages(nextMessages)
-                _uiState.update {
-                    it.copy(aiMessages = nextMessages, isAiThinking = false)
+
+                // Auto-sync generated draft & subject directly into Send form (1:1 App.tsx behavior)
+                _uiState.update { cur ->
+                    cur.copy(
+                        aiMessages = nextMessages,
+                        isAiThinking = false,
+                        subjectInput = aiMsg.extractedSubject ?: cur.subjectInput,
+                        messageInput = syncedHtml ?: cur.messageInput
+                    )
+                }
+                if (!syncedHtml.isNullOrBlank()) {
+                    addLog(LogType.SUCCESS, "Sinkronisasi Otomatis: Draf AI & Subjek disinkronkan ke tab Kirim.")
                 }
                 refreshKeyRotationStatus()
             }.onFailure { err ->
@@ -426,8 +624,9 @@ class GSwiftViewModel(
                 val errMsg = ChatMessage(
                     id = UUID.randomUUID().toString(),
                     role = "model",
-                    text = "Maaf, permintaan gagal diproses: ${err.message}",
-                    timestamp = nowTime()
+                    text = err.message ?: "Tidak dapat menghubungkan ke server G-Swift.",
+                    timestamp = nowTime(),
+                    isError = true
                 )
                 val nextMessages = _uiState.value.aiMessages + errMsg
                 _uiState.update {
@@ -437,54 +636,60 @@ class GSwiftViewModel(
         }
     }
 
-    fun clearAiChat() {
-        repository.clearChatMessages()
+    fun randomizeAiMessageRef(messageId: String) {
+        val currentList = _uiState.value.aiMessages.toMutableList()
+        val idx = currentList.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        val msg = currentList[idx]
+        val html = msg.extractedHtml ?: return
+        val bankKey = AppPresets.detectBankKey("${msg.extractedSubject.orEmpty()} $html")
+        val newRef = BankDraftEngine.generateUniqueBankReference(bankKey)
+        val refreshedHtml = BankDraftEngine.synchronizeDynamicFieldsInHtml(html, newRef, refreshRef = true)
+        val refreshedSubject = msg.extractedSubject?.let { BankDraftEngine.synchronizeSubject(it, newRef) }
+        currentList[idx] = msg.copy(extractedHtml = refreshedHtml, extractedSubject = refreshedSubject)
+        repository.saveChatMessages(currentList)
         _uiState.update {
             it.copy(
-                aiMessages = listOf(
-                    ChatMessage(
-                        id = "welcome",
-                        role = "model",
-                        text = "Riwayat percakapan dibersihkan. Siap merancang draf email baru!",
-                        timestamp = nowTime()
-                    )
-                )
+                aiMessages = currentList,
+                messageInput = refreshedHtml,
+                subjectInput = refreshedSubject ?: it.subjectInput,
+                snackbarMessage = "No. Ref diperbarui: $newRef"
             )
         }
+        addLog(LogType.INFO, "Acak Ref: No. Referensi baru $newRef diterapkan.")
+    }
+
+    fun clearAiChat() {
+        repository.clearChatMessages()
+        _uiState.update { it.copy(aiMessages = emptyList()) }
+        addLog(LogType.INFO, "Riwayat percakapan AI dibersihkan.")
     }
 
     fun applyAiDraftToSend(subject: String?, htmlOrBody: String) {
+        val bankKey = AppPresets.detectBankKey("${subject.orEmpty()} $htmlOrBody")
+        val newRef = BankDraftEngine.generateUniqueBankReference(bankKey)
+        val syncedHtml = BankDraftEngine.synchronizeDynamicFieldsInHtml(htmlOrBody, newRef, refreshRef = true)
+        val syncedSubj = subject?.let { BankDraftEngine.synchronizeSubject(it, newRef) }
         _uiState.update {
             it.copy(
-                subjectInput = subject ?: it.subjectInput,
-                messageInput = htmlOrBody,
-                snackbarMessage = "Draf AI diterapkan ke tab Kirim."
+                subjectInput = syncedSubj ?: it.subjectInput,
+                messageInput = syncedHtml,
+                snackbarMessage = "Draf AI & Ref baru ($newRef) siap dikirim."
             )
         }
-        addLog(LogType.INFO, "Draf AI diterapkan ke formulir Kirim.")
+        addLog(LogType.INFO, "Draf AI diterapkan ke tab Kirim (Ref: $newRef).")
     }
 
-    private fun extractSubjectFromAi(raw: String): String? {
-        val patterns = listOf(
-            Regex("""Subjek Rekomendasi[:*`\s]+`([^`]+)`""", RegexOption.IGNORE_CASE),
-            Regex("""Subjek[:*\s]+([^\n]+)""", RegexOption.IGNORE_CASE)
+    fun saveAiDraftAsTemplate(subject: String?, htmlContent: String) {
+        val cleanSubject = subject?.trim().orEmpty().ifBlank { "Draf Template Email AI" }
+        val name = if (cleanSubject.length > 38) "${cleanSubject.take(38)}..." else cleanSubject
+        saveTemplate(
+            name = name,
+            category = "AI Generated",
+            subject = cleanSubject,
+            message = htmlContent,
+            editingId = null
         )
-        for (p in patterns) {
-            val match = p.find(raw)
-            if (match != null) {
-                return match.groupValues[1].trim().trim('`', '"', '*')
-            }
-        }
-        return null
-    }
-
-    private fun extractHtmlFromAi(raw: String): String? {
-        val codeBlock = Regex("""```html\s*([\s\S]*?)```""", RegexOption.IGNORE_CASE).find(raw)
-        if (codeBlock != null) return codeBlock.groupValues[1].trim()
-        if (raw.contains("<!DOCTYPE html", ignoreCase = true) || raw.contains("<table", ignoreCase = true)) {
-            return raw
-        }
-        return null
     }
 
     fun saveTemplate(name: String, category: String, subject: String, message: String, editingId: String? = null) {
@@ -492,61 +697,193 @@ class GSwiftViewModel(
         if (editingId != null) {
             val idx = list.indexOfFirst { it.id == editingId }
             if (idx >= 0) {
-                list[idx] = EmailTemplate(editingId, name, category, subject, message)
+                list[idx] = EmailTemplate(editingId, name, category.ifBlank { "General" }, subject, message)
             }
         } else {
-            list.add(0, EmailTemplate(UUID.randomUUID().toString(), name, category, subject, message))
+            list.add(0, EmailTemplate(UUID.randomUUID().toString(), name, category.ifBlank { "General" }, subject, message))
         }
         repository.saveTemplates(list)
         _uiState.update {
             it.copy(templates = list, snackbarMessage = "Template '$name' tersimpan.")
         }
-        addLog(LogType.SUCCESS, "Template '$name' disimpan secara lokal.")
+        addLog(LogType.SUCCESS, "Template '$name' disimpan.")
     }
 
     fun deleteTemplate(id: String) {
         val list = _uiState.value.templates.filterNot { it.id == id }
         repository.saveTemplates(list)
         _uiState.update { it.copy(templates = list, snackbarMessage = "Template dihapus.") }
+        addLog(LogType.WARNING, "Template dihapus.")
+    }
+
+    fun deleteAllTemplates() {
+        repository.saveTemplates(emptyList())
+        _uiState.update { it.copy(templates = emptyList(), snackbarMessage = "Semua template dihapus.") }
+        addLog(LogType.WARNING, "Semua template berhasil dihapus.")
     }
 
     fun applyTemplateToSend(template: EmailTemplate) {
+        val nowMillis = System.currentTimeMillis()
+        val bankKey = AppPresets.detectBankKey("${template.subject} ${template.message}")
+        val newRef = BankDraftEngine.generateUniqueBankReference(bankKey, nowMillis)
+        val dt = BankDraftEngine.buildWibDateTime(nowMillis)
+        val syncedMsg = BankDraftEngine.synchronizeDynamicFieldsInHtml(template.message, newRef, nowMillis, refreshRef = true)
+        val syncedSubj = BankDraftEngine.synchronizeSubject(template.subject, newRef, nowMillis)
+
         _uiState.update {
             it.copy(
-                subjectInput = template.subject,
-                messageInput = template.message,
-                snackbarMessage = "Template '${template.name}' diterapkan."
+                subjectInput = syncedSubj,
+                messageInput = syncedMsg,
+                snackbarMessage = "Template '${template.name}' diterapkan (Ref: $newRef)."
             )
         }
+        addLog(LogType.INFO, "Template '${template.name}' diterapkan | Ref: $newRef | Waktu: ${dt.dateTimeShort}")
+    }
+
+    fun toggleAutoDetectSmtp(enabled: Boolean) {
+        _uiState.update { it.copy(autoDetectSmtp = enabled) }
     }
 
     fun updateSmtpConfig(config: SmtpConfig) {
-        val preset = AppPresets.getSmartSmtpPreset(config.username)
-        val merged = if (preset != null && config.host.isBlank()) {
-            config.copy(
-                host = preset.host,
-                port = preset.port,
-                connectionType = preset.connectionType,
-                dailyLimit = preset.dailyLimit
-            )
-        } else {
-            config
+        val prevUser = _uiState.value.smtpConfig.username
+        var merged = config
+        if (config.username != prevUser) {
+            val preset = AppPresets.getSmartSmtpPreset(config.username)
+            if (preset != null) {
+                merged = config.copy(
+                    host = preset.host,
+                    port = preset.port,
+                    connectionType = preset.connectionType,
+                    dailyLimit = preset.dailyLimit
+                )
+            } else if (config.username.contains("@") && _uiState.value.autoDetectSmtp) {
+                val domain = config.username.substringAfter("@").trim()
+                if (domain.contains(".")) {
+                    scheduleDomainAutoLookup(domain)
+                }
+            }
         }
         _uiState.update { it.copy(smtpConfig = merged) }
     }
 
-    fun saveAndVerifySmtp(config: SmtpConfig) {
+    private fun scheduleDomainAutoLookup(domain: String) {
+        domainLookupJob?.cancel()
+        domainLookupJob = viewModelScope.launch {
+            delay(850)
+            autoDetectSmtpByEmail(domain, silentIfFail = true)
+        }
+    }
+
+    fun saveSmtpSettings(config: SmtpConfig, onNavigateToSend: () -> Unit) {
         val preset = AppPresets.getSmartSmtpPreset(config.username)
         val normalized = config.copy(
-            host = config.host.ifBlank { preset?.host ?: "smtp.gmail.com" },
-            port = config.port.ifBlank { preset?.port ?: "587" },
+            host = config.host.trim().ifBlank { preset?.host ?: "smtp.gmail.com" },
+            port = config.port.trim().ifBlank { preset?.port ?: "587" },
             username = config.username.trim(),
-            senderEmail = config.senderEmail.ifBlank { config.username.trim() },
-            password = config.password.replace(Regex("[\\s\\u00A0]+"), "").trim()
+            senderEmail = config.senderEmail.ifBlank { config.username }.trim(),
+            password = config.password.replace(Regex("[\\s\\u00A0\\u200B-\\u200D\\uFEFF]+"), "").trim()
         )
         repository.saveSmtpConfig(normalized)
-        _uiState.update { it.copy(smtpConfig = normalized) }
+        _uiState.update {
+            it.copy(
+                smtpConfig = normalized,
+                snackbarMessage = "Konfigurasi SMTP disimpan."
+            )
+        }
+        addLog(LogType.SUCCESS, "Konfigurasi SMTP disimpan dan diperbarui.")
         verifySmtpConnection(normalized, silent = false)
+        onNavigateToSend()
+    }
+
+    fun testSmtpAndSendSample(config: SmtpConfig) {
+        if (config.username.isBlank() || config.password.isBlank()) {
+            _uiState.update { it.copy(snackbarMessage = "Lengkapi username dan App Password sebelum uji koneksi.") }
+            return
+        }
+        val preset = AppPresets.getSmartSmtpPreset(config.username)
+        val cleaned = config.copy(
+            host = config.host.trim().ifBlank { preset?.host ?: "smtp.gmail.com" },
+            port = config.port.trim().ifBlank { preset?.port ?: "587" },
+            username = config.username.trim(),
+            senderEmail = config.senderEmail.ifBlank { config.username }.trim(),
+            password = config.password.replace(Regex("[\\s\\u00A0\\u200B-\\u200D\\uFEFF]+"), "").trim()
+        )
+        repository.saveSmtpConfig(cleaned)
+        _uiState.update { it.copy(smtpConfig = cleaned, isVerifyingSmtp = true, smtpState = SmtpConnectionState.CHECKING) }
+
+        viewModelScope.launch {
+            addLog(LogType.INFO, "Memverifikasi koneksi SMTP (${cleaned.host}:${cleaned.port})...")
+            repository.verifySmtp(cleaned).onSuccess { verifyResp ->
+                if (!verifyResp.connected) {
+                    val err = verifyResp.error ?: "Gagal terhubung ke server SMTP."
+                    addLog(LogType.ERROR, "[UJICOBA GAGAL] $err")
+                    _uiState.update {
+                        it.copy(
+                            isVerifyingSmtp = false,
+                            smtpState = SmtpConnectionState.DISCONNECTED,
+                            smtpStatusMessage = err,
+                            snackbarMessage = "Verifikasi gagal: $err"
+                        )
+                    }
+                    return@onSuccess
+                }
+
+                // Connected -> send actual sample test email just like App.tsx testSMTPConnection()
+                val targetEmail = cleaned.senderEmail.ifBlank { cleaned.username }
+                val dt = BankDraftEngine.buildWibDateTime()
+                val testHtml = """
+                    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 36px 20px; background: #f0f7ff; border-radius: 20px; border: 1px solid #d0e4ff; max-width: 520px; margin: 0 auto;">
+                      <h2 style="color: #002d54; font-size: 19px; font-weight: 800; margin: 0 0 8px 0;">Ujicoba Koneksi Relay Berhasil!</h2>
+                      <p style="color: #475569; font-size: 13px; margin: 0 0 18px 0; line-height: 1.5;">Pengaturan SMTP Anda valid dan server pengiriman telah berhasil merelay pesan ini ke inbox Anda.</p>
+                      <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; font-size: 11px; color: #64748b; text-align: left; line-height: 1.6;">
+                        <div><b>Server Relay:</b> ${cleaned.host}:${cleaned.port}</div>
+                        <div><b>Akun Pengirim:</b> ${cleaned.username}</div>
+                        <div><b>Waktu Pengiriman:</b> ${dt.dateTimeShort} WIB</div>
+                      </div>
+                    </div>
+                """.trimIndent()
+
+                addLog(LogType.SUCCESS, "SMTP terverifikasi! Mengirim email uji coba ke $targetEmail...")
+                repository.sendEmail(
+                    to = targetEmail,
+                    subject = "Test Connection - G-Swift Relay Console",
+                    htmlOrText = testHtml,
+                    config = cleaned
+                ).onSuccess {
+                    addLog(LogType.SUCCESS, "[UJICOBA SUKSES] Email tes terkirim ke $targetEmail.")
+                    _uiState.update {
+                        it.copy(
+                            isVerifyingSmtp = false,
+                            smtpState = SmtpConnectionState.CONNECTED,
+                            smtpStatusMessage = "Terhubung & Email tes terkirim ke $targetEmail",
+                            snackbarMessage = "Koneksi valid! Email uji coba dikirim ke $targetEmail"
+                        )
+                    }
+                }.onFailure { sendErr ->
+                    val err = sendErr.message ?: "Gagal mengirim email uji coba."
+                    addLog(LogType.ERROR, "[UJICOBA GAGAL] $err")
+                    _uiState.update {
+                        it.copy(
+                            isVerifyingSmtp = false,
+                            smtpState = SmtpConnectionState.DISCONNECTED,
+                            smtpStatusMessage = err,
+                            snackbarMessage = "Gagal kirim tes: $err"
+                        )
+                    }
+                }
+            }.onFailure { err ->
+                val msg = err.message ?: "Gagal terhubung ke server."
+                addLog(LogType.ERROR, "[UJICOBA GAGAL] $msg")
+                _uiState.update {
+                    it.copy(
+                        isVerifyingSmtp = false,
+                        smtpState = SmtpConnectionState.DISCONNECTED,
+                        smtpStatusMessage = msg,
+                        snackbarMessage = msg
+                    )
+                }
+            }
+        }
     }
 
     fun verifySmtpConnection(config: SmtpConfig = _uiState.value.smtpConfig, silent: Boolean = false) {
@@ -560,6 +897,21 @@ class GSwiftViewModel(
             return
         }
 
+        val passCheck = BankDraftEngine.validateAppPassword(config.password, config.username)
+        if (passCheck.isGmailOrYahoo && !passCheck.isExact16) {
+            val msg = "Format App Password belum memenuhi syarat (${passCheck.length}/16 karakter). Harap gunakan 16 karakter tanpa spasi."
+            _uiState.update {
+                it.copy(
+                    isVerifyingSmtp = false,
+                    smtpState = SmtpConnectionState.DISCONNECTED,
+                    smtpStatusMessage = msg,
+                    snackbarMessage = if (!silent) msg else null
+                )
+            }
+            if (!silent) addLog(LogType.ERROR, msg)
+            return
+        }
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -570,12 +922,12 @@ class GSwiftViewModel(
             }
             repository.verifySmtp(config).onSuccess { resp ->
                 if (resp.connected) {
-                    addLog(LogType.SUCCESS, "SMTP terhubung: ${resp.host}:${resp.port} (${resp.username})")
+                    addLog(LogType.SUCCESS, "SMTP terhubung: ${resp.host ?: config.host}:${resp.port ?: config.port} (${resp.username ?: config.username})")
                     _uiState.update {
                         it.copy(
                             isVerifyingSmtp = false,
                             smtpState = SmtpConnectionState.CONNECTED,
-                            smtpStatusMessage = resp.message ?: "Terhubung ke ${resp.host}",
+                            smtpStatusMessage = resp.message ?: "Terhubung ke ${resp.host ?: config.host}",
                             snackbarMessage = if (!silent) "Koneksi SMTP berhasil diverifikasi!" else null
                         )
                     }
@@ -605,14 +957,16 @@ class GSwiftViewModel(
         }
     }
 
-    fun autoDetectSmtpByEmail(emailOrDomain: String) {
+    fun autoDetectSmtpByEmail(emailOrDomain: String, silentIfFail: Boolean = false) {
         val domain = if (emailOrDomain.contains("@")) {
             emailOrDomain.substringAfter("@").trim()
         } else {
             emailOrDomain.trim()
         }
         if (domain.isBlank()) {
-            _uiState.update { it.copy(snackbarMessage = "Masukkan email atau domain terlebih dahulu.") }
+            if (!silentIfFail) {
+                _uiState.update { it.copy(snackbarMessage = "Masukkan email atau domain terlebih dahulu.") }
+            }
             return
         }
         viewModelScope.launch {
@@ -621,33 +975,44 @@ class GSwiftViewModel(
             repository.lookupDomain(domain).onSuccess { resp ->
                 val info = resp.smtp
                 if (resp.success && info != null) {
-                    val updated = _uiState.value.smtpConfig.copy(
-                        host = info.host,
-                        port = info.port,
-                        connectionType = info.connectionType,
-                        dailyLimit = info.dailyLimit
-                    )
-                    repository.saveSmtpConfig(updated)
-                    addLog(LogType.SUCCESS, "Deteksi domain berhasil (${resp.layer}): ${info.host}:${info.port}")
+                    val updated = if (_uiState.value.autoDetectSmtp || !silentIfFail) {
+                        _uiState.value.smtpConfig.copy(
+                            host = info.host,
+                            port = info.port,
+                            connectionType = info.connectionType,
+                            dailyLimit = info.dailyLimit
+                        )
+                    } else _uiState.value.smtpConfig
+
+                    if (_uiState.value.autoDetectSmtp || !silentIfFail) {
+                        repository.saveSmtpConfig(updated)
+                    }
+                    addLog(LogType.SUCCESS, "SMTP Cerdas (${resp.layer ?: "7-Layer"}): ${info.host}:${info.port}")
                     _uiState.update {
                         it.copy(
                             isLookingUpDomain = false,
+                            detectedLookupInfo = info,
                             smtpConfig = updated,
-                            snackbarMessage = "Terdeteksi ${info.name}: ${info.host}:${info.port}"
+                            snackbarMessage = if (!silentIfFail) "Terdeteksi ${info.name}: ${info.host}:${info.port}" else null
                         )
                     }
                 } else {
                     _uiState.update {
                         it.copy(
                             isLookingUpDomain = false,
-                            snackbarMessage = resp.error ?: "Domain tidak ditemukan."
+                            snackbarMessage = if (!silentIfFail) (resp.error ?: "Domain tidak ditemukan.") else null
                         )
                     }
                 }
             }.onFailure { err ->
-                addLog(LogType.ERROR, "Deteksi domain gagal: ${err.message}")
+                if (!silentIfFail) {
+                    addLog(LogType.ERROR, "Deteksi domain gagal: ${err.message}")
+                }
                 _uiState.update {
-                    it.copy(isLookingUpDomain = false, snackbarMessage = "Gagal: ${err.message}")
+                    it.copy(
+                        isLookingUpDomain = false,
+                        snackbarMessage = if (!silentIfFail) "Gagal: ${err.message}" else null
+                    )
                 }
             }
         }

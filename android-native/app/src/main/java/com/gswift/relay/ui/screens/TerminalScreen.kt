@@ -1,5 +1,6 @@
 package com.gswift.relay.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,28 +8,33 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.RestartAlt
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,19 +56,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.gswift.relay.data.model.LogType
 import com.gswift.relay.data.model.SmtpConnectionState
-import com.gswift.relay.ui.theme.EmeraldOnline
-import com.gswift.relay.ui.theme.GoldAccent
 import com.gswift.relay.ui.viewmodel.MainUiState
 
 @Composable
 fun TerminalScreen(
     uiState: MainUiState,
-    onRefreshKeys: () -> Unit,
-    onResetKeys: () -> Unit,
-    onClearLogs: () -> Unit
+    onScanSmtp: () -> Unit,
+    onClearLogs: () -> Unit,
+    onGoToAccounts: () -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
-    var showKeysMenu by remember { mutableStateOf(false) }
+    var showDiagnostics by remember { mutableStateOf(false) }
+    val diag = uiState.smtpDiagnostic
+
+    val diagDotColor = when (diag.severity) {
+        "healthy" -> Color(0xFF34D399)
+        "warning" -> Color(0xFFFBBF24)
+        "error" -> Color(0xFFFB7185)
+        else -> Color(0xFF94A3B8)
+    }
 
     Box(
         modifier = Modifier
@@ -75,14 +87,14 @@ fun TerminalScreen(
                 .fillMaxSize()
                 .shadow(10.dp, RoundedCornerShape(22.dp))
                 .clip(RoundedCornerShape(22.dp))
-                .background(Color(0xFF0B1120))
+                .background(Color(0xFF070B14))
                 .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(22.dp))
         ) {
             // Top Window Title Bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF111827))
+                    .background(Color(0xFF0C1220))
                     .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -92,7 +104,6 @@ fun TerminalScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    // macOS Window Dots
                     Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFEF4444)))
                         Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFF59E0B)))
@@ -100,13 +111,13 @@ fun TerminalScreen(
                     }
 
                     Text(
-                        text = "relay",
+                        text = "relay.log",
                         color = Color(0xFF94A3B8),
-                        fontSize = 11.5.sp,
+                        fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.width(34.dp)
+                        modifier = Modifier.width(42.dp)
                     )
 
                     // ● LIVE Badge
@@ -116,9 +127,9 @@ fun TerminalScreen(
                         border = BorderStroke(1.dp, Color(0xFF059669).copy(alpha = 0.5f))
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Box(
                                 modifier = Modifier
@@ -129,102 +140,49 @@ fun TerminalScreen(
                             Text(
                                 text = "LIVE",
                                 color = Color(0xFF34D399),
-                                fontSize = 9.5.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.ExtraBold,
                                 fontFamily = FontFamily.Monospace
                             )
                         }
                     }
 
-                    // Key Rotation Dropdown Pill
-                    Box {
-                        val rot = uiState.keyRotationStatus
-                        val dotColor = if ((rot?.activeKeys ?: 0) > 0) Color(0xFF34D399) else Color(0xFF94A3B8)
-                        Surface(
-                            color = Color(0xFF1E293B),
-                            shape = RoundedCornerShape(10.dp),
-                            border = BorderStroke(1.dp, Color(0xFF334155)),
-                            modifier = Modifier.clickable { showKeysMenu = true }
+                    // Diagnostik Dropdown Toggle Pill
+                    Surface(
+                        color = if (showDiagnostics) Color(0xFF1E293B) else Color(0xFF141C2B),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, if (showDiagnostics) diagDotColor.copy(alpha = 0.6f) else Color(0xFF334155)),
+                        modifier = Modifier.clickable { showDiagnostics = !showDiagnostics }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(dotColor)
-                                )
-                                Icon(
-                                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                                    contentDescription = "Status API Key",
-                                    tint = Color(0xFF94A3B8),
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-
-                        DropdownMenu(
-                            expanded = showKeysMenu,
-                            onDismissRequest = { showKeysMenu = false }
-                        ) {
-                            if (rot != null) {
-                                val cooldownCount = rot.keys.count { it.status != "active" }
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = "Aktif: ${rot.activeKeys}/${rot.totalKeys} • Cooldown: $cooldownCount",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp
-                                        )
-                                    },
-                                    onClick = {}
-                                )
-                                rot.keys.take(6).forEach { key ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = "${key.provider.uppercase()} (${key.maskedKey}) - ${key.status.uppercase()}",
-                                                fontSize = 11.5.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                color = if (key.status == "active") EmeraldOnline else GoldAccent
-                                            )
-                                        },
-                                        onClick = {}
-                                    )
-                                }
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.RestartAlt, contentDescription = null) },
-                                    text = { Text("Reset Cooldown Semua Key", fontSize = 12.sp) },
-                                    onClick = {
-                                        onResetKeys()
-                                        showKeysMenu = false
-                                    }
-                                )
-                            } else {
-                                DropdownMenuItem(
-                                    text = { Text("Memuat status key dari server...", fontSize = 12.sp) },
-                                    onClick = {
-                                        onRefreshKeys()
-                                        showKeysMenu = false
-                                    }
-                                )
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(diagDotColor)
+                            )
+                            Icon(
+                                imageVector = if (showDiagnostics) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = "Diagnostik SMTP",
+                                tint = Color(0xFF94A3B8),
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
                 }
 
-                // Right Window Toolbar Actions (Refresh, Copy, Clear)
+                // Right Window Toolbar Actions: Pindai, Copy, Clear
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     TerminalActionButton(
-                        onClick = onRefreshKeys,
+                        onClick = onScanSmtp,
                         icon = {
                             Icon(
                                 Icons.Rounded.Refresh,
-                                contentDescription = "Refresh",
+                                contentDescription = "Pindai Koneksi SMTP",
                                 tint = Color(0xFFCBD5E1),
                                 modifier = Modifier.size(15.dp)
                             )
@@ -258,6 +216,147 @@ fun TerminalScreen(
                 }
             }
 
+            // Expandable SMTP Diagnostic Tray (1:1 App.tsx Diagnostik Console)
+            AnimatedVisibility(visible = showDiagnostics) {
+                Surface(
+                    color = Color(0xFF0F172A),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 310.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Surface(
+                                color = diagDotColor.copy(alpha = 0.16f),
+                                shape = CircleShape,
+                                border = BorderStroke(1.dp, diagDotColor.copy(alpha = 0.5f))
+                            ) {
+                                Text(
+                                    text = diag.badge,
+                                    color = diagDotColor,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Black,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                            Text(
+                                text = diag.category,
+                                color = Color(0xFF94A3B8),
+                                fontSize = 10.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+
+                        Text(
+                            text = diag.title,
+                            color = Color.White,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = diag.rootCause,
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 11.5.sp,
+                            lineHeight = 16.sp
+                        )
+
+                        diag.rawError?.takeIf { it.isNotBlank() }?.let { raw ->
+                            Surface(
+                                color = Color(0xFF070B14),
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(1.dp, Color(0xFF334155))
+                            ) {
+                                Text(
+                                    text = raw,
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+
+                        diag.steps.forEach { step ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Surface(
+                                    color = Color(0xFF1E293B),
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text(
+                                            text = "${step.num}",
+                                            color = Color(0xFF38BDF8),
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = step.title,
+                                        color = Color(0xFFE2E8F0),
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = step.desc,
+                                        color = Color(0xFF94A3B8),
+                                        fontSize = 10.5.sp,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = onGoToAccounts,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, Color(0xFF334155)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(34.dp)
+                            ) {
+                                Icon(Icons.Rounded.Settings, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("Konfigurasi Akun", color = Color(0xFFE2E8F0), fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = onScanSmtp,
+                                shape = RoundedCornerShape(10.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF059669)),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(34.dp)
+                            ) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(5.dp))
+                                Text("Pindai Sekarang", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
             HorizontalDivider(color = Color(0xFF1E293B))
 
             // Monospace Log Stream
@@ -269,21 +368,27 @@ fun TerminalScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(uiState.logs) { log ->
-                    val msgColor = when (log.type) {
-                        LogType.INFO -> Color(0xFFE2E8F0)
-                        LogType.SUCCESS -> Color(0xFF34D399)
-                        LogType.WARNING -> Color(0xFFFBBF24)
-                        LogType.ERROR -> Color(0xFFFB7185)
+                    val (glyph, msgColor) = when (log.type) {
+                        LogType.INFO -> "•" to Color(0xFFE2E8F0)
+                        LogType.SUCCESS -> "✓" to Color(0xFF34D399)
+                        LogType.WARNING -> "⚠" to Color(0xFFFBBF24)
+                        LogType.ERROR -> "✕" to Color(0xFFFB7185)
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         Text(
                             text = "[${log.timestamp}]",
                             color = Color(0xFF64748B),
-                            fontSize = 12.sp,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = glyph,
+                            color = msgColor,
+                            fontSize = 11.5.sp,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
@@ -304,7 +409,7 @@ fun TerminalScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(Color(0xFF0F172A))
+                    .background(Color(0xFF0C1220))
                     .padding(horizontal = 14.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -327,11 +432,11 @@ fun TerminalScreen(
                     )
                 }
 
-                val smtpLabel = when (uiState.smtpState) {
-                    SmtpConnectionState.CONNECTED -> "Terhubung"
-                    SmtpConnectionState.DISCONNECTED -> "Terputus"
-                    SmtpConnectionState.CHECKING -> "Memeriksa..."
-                    SmtpConnectionState.UNCONFIGURED -> "Belum terkonfigurasi"
+                val smtpLabel = when {
+                    uiState.smtpConfig.username.isBlank() -> "Belum terkonfigurasi"
+                    uiState.smtpState == SmtpConnectionState.CONNECTED -> "${uiState.smtpConfig.host}:${uiState.smtpConfig.port}"
+                    uiState.smtpState == SmtpConnectionState.CHECKING -> "Memeriksa..."
+                    else -> "Terputus (${uiState.smtpConfig.host})"
                 }
                 val smtpLabelColor = when (uiState.smtpState) {
                     SmtpConnectionState.CONNECTED -> Color(0xFF34D399)
@@ -349,7 +454,9 @@ fun TerminalScreen(
                         text = smtpLabel,
                         color = smtpLabelColor,
                         fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }

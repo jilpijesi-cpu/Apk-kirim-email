@@ -7,6 +7,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,16 +18,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Send
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,7 +61,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.gswift.relay.data.model.EmailTemplate
+import com.gswift.relay.ui.components.NativeReceiptPreview
 import com.gswift.relay.ui.theme.NavyPrimary
 import com.gswift.relay.ui.theme.RoseError
 import com.gswift.relay.ui.viewmodel.MainUiState
@@ -66,6 +73,7 @@ fun TemplatesScreen(
     uiState: MainUiState,
     onSaveTemplate: (name: String, category: String, subject: String, message: String, editingId: String?) -> Unit,
     onDeleteTemplate: (String) -> Unit,
+    onDeleteAllTemplates: () -> Unit,
     onApplyTemplate: (EmailTemplate) -> Unit,
     onSendTest: (String, EmailTemplate) -> Unit
 ) {
@@ -73,6 +81,9 @@ fun TemplatesScreen(
     var showEditorDialog by remember { mutableStateOf(false) }
     var editingTemplate by remember { mutableStateOf<EmailTemplate?>(null) }
     var testTargetTemplate by remember { mutableStateOf<EmailTemplate?>(null) }
+    var previewTemplate by remember { mutableStateOf<EmailTemplate?>(null) }
+    var confirmDeleteTemplate by remember { mutableStateOf<EmailTemplate?>(null) }
+    var confirmDeleteAll by remember { mutableStateOf(false) }
 
     val filteredTemplates = remember(uiState.templates, searchQuery) {
         if (searchQuery.isBlank()) {
@@ -93,18 +104,40 @@ fun TemplatesScreen(
             .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
         // Header matching Screenshot 2 (Templates Email)
-        Text(
-            text = "Templates Email",
-            fontSize = 21.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = Color(0xFF0F172A)
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = "Gunakan template untuk kirim cepat",
-            fontSize = 13.sp,
-            color = Color(0xFF64748B)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Templates Email",
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFF0F172A)
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Gunakan template untuk kirim cepat",
+                    fontSize = 13.sp,
+                    color = Color(0xFF64748B)
+                )
+            }
+
+            if (uiState.templates.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { confirmDeleteAll = true },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, Color(0xFFFDA4AF)),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(Icons.Rounded.DeleteSweep, contentDescription = null, tint = RoseError, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Hapus Semua", fontSize = 10.5.sp, fontWeight = FontWeight.Bold, color = RoseError)
+                }
+            }
+        }
 
         Spacer(Modifier.height(14.dp))
 
@@ -280,13 +313,16 @@ fun TemplatesScreen(
                                     )
                                 }
                                 Row {
+                                    IconButton(onClick = { previewTemplate = tpl }) {
+                                        Icon(Icons.Rounded.Visibility, contentDescription = "Pratinjau", tint = NavyPrimary)
+                                    }
                                     IconButton(onClick = {
                                         editingTemplate = tpl
                                         showEditorDialog = true
                                     }) {
                                         Icon(Icons.Rounded.Edit, contentDescription = "Edit", tint = Color(0xFF475569))
                                     }
-                                    IconButton(onClick = { onDeleteTemplate(tpl.id) }) {
+                                    IconButton(onClick = { confirmDeleteTemplate = tpl }) {
                                         Icon(Icons.Rounded.Delete, contentDescription = "Hapus", tint = RoseError)
                                     }
                                 }
@@ -311,13 +347,13 @@ fun TemplatesScreen(
                                 }
                                 Button(
                                     onClick = { onApplyTemplate(tpl) },
-                                    modifier = Modifier.weight(1f),
+                                    modifier = Modifier.weight(1.2f),
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary)
                                 ) {
-                                    Icon(Icons.Rounded.Send, contentDescription = null, modifier = Modifier.size(15.dp))
+                                    Icon(Icons.Rounded.Send, contentDescription = null, modifier = Modifier.size(14.dp))
                                     Spacer(Modifier.width(5.dp))
-                                    Text("Gunakan", fontSize = 12.sp)
+                                    Text("PAKAI TEMPLATE", fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                                 }
                             }
                         }
@@ -327,6 +363,7 @@ fun TemplatesScreen(
         }
     }
 
+    // Create / Edit Template Dialog
     if (showEditorDialog) {
         var name by remember { mutableStateOf(editingTemplate?.name ?: "") }
         var category by remember { mutableStateOf(editingTemplate?.category ?: "Umum") }
@@ -365,7 +402,7 @@ fun TemplatesScreen(
                         label = { Text("Konten / HTML") },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
+                            .height(140.dp)
                     )
                 }
             },
@@ -389,19 +426,101 @@ fun TemplatesScreen(
         )
     }
 
+    // Preview Template Modal (Eye icon)
+    previewTemplate?.let { tpl ->
+        Dialog(onDismissRequest = { previewTemplate = null }) {
+            Card(
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = tpl.name,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFF0F172A)
+                            )
+                            Text(
+                                text = "Subjek: ${tpl.subject}",
+                                fontSize = 11.sp,
+                                color = Color(0xFF64748B),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = { previewTemplate = null }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Rounded.Close, contentDescription = "Tutup", modifier = Modifier.size(18.dp))
+                        }
+                    }
+
+                    NativeReceiptPreview(
+                        html = tpl.message,
+                        subject = tpl.subject,
+                        compactMobileMode = true
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { previewTemplate = null },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Tutup")
+                        }
+                        Button(
+                            onClick = {
+                                previewTemplate = null
+                                onApplyTemplate(tpl)
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = NavyPrimary),
+                            modifier = Modifier.weight(1.2f)
+                        ) {
+                            Text("Pakai Template", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Send Test Email Dialog (pre-filled with configured senderEmail/username)
     testTargetTemplate?.let { tpl ->
-        var emailInput by remember { mutableStateOf("") }
+        val defaultEmail = uiState.smtpConfig.senderEmail.ifBlank { uiState.smtpConfig.username }
+        var emailInput by remember(tpl.id) { mutableStateOf(defaultEmail) }
         AlertDialog(
             onDismissRequest = { testTargetTemplate = null },
             title = { Text("Kirim Email Percobaan") },
             text = {
-                OutlinedTextField(
-                    value = emailInput,
-                    onValueChange = { emailInput = it },
-                    label = { Text("Alamat Email Tujuan") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Template '${tpl.name}' akan dikirim ke alamat di bawah:",
+                        fontSize = 12.sp,
+                        color = Color(0xFF64748B)
+                    )
+                    OutlinedTextField(
+                        value = emailInput,
+                        onValueChange = { emailInput = it },
+                        label = { Text("Alamat Email Tujuan") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             },
             confirmButton = {
                 Button(
@@ -417,6 +536,56 @@ fun TemplatesScreen(
             },
             dismissButton = {
                 TextButton(onClick = { testTargetTemplate = null }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // Confirm Single Delete
+    confirmDeleteTemplate?.let { tpl ->
+        AlertDialog(
+            onDismissRequest = { confirmDeleteTemplate = null },
+            title = { Text("Hapus Template?") },
+            text = { Text("Template '${tpl.name}' akan dihapus permanen.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteTemplate(tpl.id)
+                        confirmDeleteTemplate = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RoseError)
+                ) {
+                    Text("Hapus")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteTemplate = null }) {
+                    Text("Batal")
+                }
+            }
+        )
+    }
+
+    // Confirm Delete All
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            title = { Text("Hapus Semua Template?") },
+            text = { Text("Seluruh ${uiState.templates.size} template tersimpan akan dihapus permanen.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteAllTemplates()
+                        confirmDeleteAll = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = RoseError)
+                ) {
+                    Text("Hapus Semua")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDeleteAll = false }) {
                     Text("Batal")
                 }
             }

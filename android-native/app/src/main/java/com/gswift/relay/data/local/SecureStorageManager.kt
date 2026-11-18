@@ -6,6 +6,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.gswift.relay.BuildConfig
 import com.gswift.relay.data.model.ChatMessage
 import com.gswift.relay.data.model.EmailTemplate
 import com.gswift.relay.data.model.LastSentEmail
@@ -41,6 +42,28 @@ class SecureStorageManager(context: Context) {
         val raw = securePrefs.getString(KEY_SMTP_CONFIG, null) ?: return SmtpConfig()
         return runCatching { gson.fromJson(raw, SmtpConfig::class.java) }
             .getOrDefault(SmtpConfig())
+    }
+
+    fun saveServerBaseUrl(url: String) {
+        val cleaned = normalizeUrl(url)
+        appPrefs.edit().putString(KEY_SERVER_BASE_URL, cleaned).apply()
+    }
+
+    fun loadServerBaseUrl(): String {
+        val saved = appPrefs.getString(KEY_SERVER_BASE_URL, null)
+        return if (!saved.isNullOrBlank()) normalizeUrl(saved) else normalizeUrl(BuildConfig.BASE_URL)
+    }
+
+    private fun normalizeUrl(raw: String): String {
+        var trimmed = raw.trim()
+        if (trimmed.isEmpty()) return BuildConfig.BASE_URL
+        if (!trimmed.startsWith("http://", true) && !trimmed.startsWith("https://", true)) {
+            trimmed = "https://$trimmed"
+        }
+        if (!trimmed.endsWith("/")) {
+            trimmed = "$trimmed/"
+        }
+        return trimmed
     }
 
     fun saveLastSentEmail(item: LastSentEmail) {
@@ -96,6 +119,7 @@ class SecureStorageManager(context: Context) {
 
     companion object {
         private const val KEY_SMTP_CONFIG = "smtp_config"
+        private const val KEY_SERVER_BASE_URL = "server_base_url"
         private const val KEY_LAST_SENT = "last_sent_email"
         private const val KEY_TEMPLATES = "email_templates"
         private const val KEY_CHAT_MESSAGES = "chat_messages"

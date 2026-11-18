@@ -59,6 +59,7 @@ import com.gswift.relay.ui.screens.AiChatScreen
 import com.gswift.relay.ui.screens.SendScreen
 import com.gswift.relay.ui.screens.TemplatesScreen
 import com.gswift.relay.ui.screens.TerminalScreen
+import com.gswift.relay.ui.theme.AppSkyGradient
 import com.gswift.relay.ui.theme.ClaudeStarburstLogo
 import com.gswift.relay.ui.theme.ClaudeTerracotta
 import com.gswift.relay.ui.theme.EmeraldOnline
@@ -95,6 +96,12 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
         if (!msg.isNullOrBlank()) {
             snackbarHostState.showSnackbar(msg)
             viewModel.clearSnackbar()
+        }
+    }
+
+    LaunchedEffect(currentRoute) {
+        if (currentRoute == AppDestination.Send.route) {
+            viewModel.syncSendDraftTime()
         }
     }
 
@@ -194,7 +201,7 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
                                             if (uiState.smtpState == SmtpConnectionState.UNCONFIGURED) {
                                                 navigateTo(AppDestination.Accounts.route)
                                             } else {
-                                                viewModel.verifySmtpConnection()
+                                                viewModel.verifySmtpConnection(silent = false)
                                             }
                                         }
                                         .padding(horizontal = 11.dp, vertical = 6.dp),
@@ -327,13 +334,19 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
             startDestination = AppDestination.Send.route,
             modifier = Modifier
                 .fillMaxSize()
-                .background(com.gswift.relay.ui.theme.AppSkyGradient)
+                .background(AppSkyGradient)
                 .padding(innerPadding)
         ) {
             composable(AppDestination.Send.route) {
                 SendScreen(
                     uiState = uiState,
                     onUpdateFields = viewModel::updateMailFields,
+                    onCleanOrPasteRecipient = viewModel::handleRecipientPasteOrClean,
+                    onCleanCurrentRecipient = viewModel::cleanCurrentRecipientInput,
+                    onDismissPasteFeedback = viewModel::dismissPasteFeedback,
+                    onDismissSendError = viewModel::dismissSendErrorInline,
+                    onApplyBankToDraft = viewModel::applyBankToSendDraft,
+                    onApplyTemplate = viewModel::applyTemplateToSend,
                     onSendClick = viewModel::sendEmail,
                     onClearClick = viewModel::clearMailForm,
                     onApplyLastSent = viewModel::applyLastSentEmail,
@@ -341,7 +354,7 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
                     onGoToAccounts = { navigateTo(AppDestination.Accounts.route) },
                     onGoToAi = { navigateTo(AppDestination.Ai.route) },
                     onGoToTemplates = { navigateTo(AppDestination.Templates.route) },
-                    extractEmails = viewModel::extractCleanEmails
+                    onGoToTerminal = { navigateTo(AppDestination.Terminal.route) }
                 )
             }
             composable(AppDestination.Ai.route) {
@@ -357,7 +370,11 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
                     onApplyDraft = { subj, html ->
                         viewModel.applyAiDraftToSend(subj, html)
                         navigateTo(AppDestination.Send.route)
-                    }
+                    },
+                    onRandomizeRef = viewModel::randomizeAiMessageRef,
+                    onSaveAsTemplate = viewModel::saveAiDraftAsTemplate,
+                    onRefreshKeys = viewModel::refreshKeyRotationStatus,
+                    onResetKeys = viewModel::resetKeyRotationCooldowns
                 )
             }
             composable(AppDestination.Templates.route) {
@@ -365,6 +382,7 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
                     uiState = uiState,
                     onSaveTemplate = viewModel::saveTemplate,
                     onDeleteTemplate = viewModel::deleteTemplate,
+                    onDeleteAllTemplates = viewModel::deleteAllTemplates,
                     onApplyTemplate = { tpl ->
                         viewModel.applyTemplateToSend(tpl)
                         navigateTo(AppDestination.Send.route)
@@ -375,17 +393,28 @@ fun GSwiftApp(viewModel: GSwiftViewModel) {
             composable(AppDestination.Terminal.route) {
                 TerminalScreen(
                     uiState = uiState,
-                    onRefreshKeys = viewModel::refreshKeyRotationStatus,
-                    onResetKeys = viewModel::resetKeyRotationCooldowns,
-                    onClearLogs = viewModel::clearLogs
+                    onScanSmtp = { viewModel.verifySmtpConnection(silent = false) },
+                    onClearLogs = viewModel::clearLogs,
+                    onGoToAccounts = { navigateTo(AppDestination.Accounts.route) }
                 )
             }
             composable(AppDestination.Accounts.route) {
                 AccountsScreen(
                     uiState = uiState,
                     onUpdateConfig = viewModel::updateSmtpConfig,
-                    onSaveAndVerify = viewModel::saveAndVerifySmtp,
-                    onAutoDetectDomain = viewModel::autoDetectSmtpByEmail
+                    onSaveSettings = { cfg ->
+                        viewModel.saveSmtpSettings(cfg) {
+                            navigateTo(AppDestination.Send.route)
+                        }
+                    },
+                    onTestAndSendSample = viewModel::testSmtpAndSendSample,
+                    onVerifyOnly = { viewModel.verifySmtpConnection(silent = false) },
+                    onAutoDetectDomain = { target ->
+                        viewModel.autoDetectSmtpByEmail(target, silentIfFail = false)
+                    },
+                    onToggleAutoDetect = viewModel::toggleAutoDetectSmtp,
+                    onUpdateServerUrl = { url -> viewModel.updateServerBaseUrl(url, testNow = true) },
+                    onGoToSend = { navigateTo(AppDestination.Send.route) }
                 )
             }
         }

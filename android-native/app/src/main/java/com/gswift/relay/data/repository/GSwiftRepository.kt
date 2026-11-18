@@ -1,6 +1,7 @@
 package com.gswift.relay.data.repository
 
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.gswift.relay.data.local.SecureStorageManager
 import com.gswift.relay.data.model.AiProvidersResponse
 import com.gswift.relay.data.model.AppPresets
@@ -8,7 +9,6 @@ import com.gswift.relay.data.model.ChatAiRequest
 import com.gswift.relay.data.model.ChatAiResponse
 import com.gswift.relay.data.model.ChatHistoryItem
 import com.gswift.relay.data.model.ChatMessage
-import com.gswift.relay.data.model.ClientDateTime
 import com.gswift.relay.data.model.DomainLookupResponse
 import com.gswift.relay.data.model.EmailTemplate
 import com.gswift.relay.data.model.HealthResponse
@@ -21,14 +21,14 @@ import com.gswift.relay.data.model.SmtpConfig
 import com.gswift.relay.data.model.VerifySmtpRequest
 import com.gswift.relay.data.model.VerifySmtpResponse
 import com.gswift.relay.data.remote.GSwiftApiService
+import com.gswift.relay.data.util.BankDraftEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.Response
 import java.text.SimpleDateFormat
-import java.util.Calendar
+import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
-import kotlin.random.Random
 
 class GSwiftRepository(
     private val api: GSwiftApiService,
@@ -38,6 +38,9 @@ class GSwiftRepository(
 
     fun loadSmtpConfig(): SmtpConfig = storage.loadSmtpConfig()
     fun saveSmtpConfig(config: SmtpConfig) = storage.saveSmtpConfig(config)
+
+    fun loadServerBaseUrl(): String = storage.loadServerBaseUrl()
+    fun saveServerBaseUrl(url: String) = storage.saveServerBaseUrl(url)
 
     fun loadLastSentEmail(): LastSentEmail? = storage.loadLastSentEmail()
     fun saveLastSentEmail(item: LastSentEmail) = storage.saveLastSentEmail(item)
@@ -84,39 +87,11 @@ class GSwiftRepository(
         val cleanUser = config.username.trim()
         val cleanPass = config.password.replace(Regex("[\\s\\u00A0\\u200B-\\u200D\\uFEFF]+"), "").trim()
         return config.copy(
+            host = config.host.trim().ifBlank { "smtp.gmail.com" },
+            port = config.port.trim().ifBlank { "587" },
             username = cleanUser,
             password = cleanPass,
             senderEmail = config.senderEmail.ifBlank { cleanUser }.trim()
-        )
-    }
-
-    private fun buildClientDateTime(): ClientDateTime {
-        val tz = TimeZone.getTimeZone("Asia/Jakarta")
-        val cal = Calendar.getInstance(tz)
-        val monthsShort = arrayOf("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
-        val monthsFull = arrayOf("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
-        val day = cal.get(Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
-        val mIdx = cal.get(Calendar.MONTH)
-        val monthNum = (mIdx + 1).toString().padStart(2, '0')
-        val year = cal.get(Calendar.YEAR)
-        val hours = cal.get(Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
-        val minutes = cal.get(Calendar.MINUTE).toString().padStart(2, '0')
-        val seconds = cal.get(Calendar.SECOND).toString().padStart(2, '0')
-        val monthShort = monthsShort[mIdx]
-        val monthFull = monthsFull[mIdx]
-        return ClientDateTime(
-            day = day,
-            monthShort = monthShort,
-            monthFull = monthFull,
-            year = year,
-            hours = hours,
-            minutes = minutes,
-            seconds = seconds,
-            dateShort = "$day $monthShort $year",
-            dateFull = "$day $monthFull $year",
-            timeShort = "$hours:$minutes",
-            timeFull = "$hours:$minutes:$seconds",
-            dateTimeShort = "$day/$monthNum/$year $hours:$minutes"
         )
     }
 
@@ -124,42 +99,59 @@ class GSwiftRepository(
         to: String,
         subject: String,
         htmlOrText: String,
-        config: SmtpConfig
+        config: SmtpConfig,
+        customCancelLink: String = ""
     ): Result<SendEmailResponse> = withContext(Dispatchers.IO) {
         try {
             val cleanedCfg = sanitizeSmtpConfig(config)
-            val isHtml = Regex("<[a-z][\\s\\S]*>", RegexOption.IGNORE_CASE).containsMatchIn(htmlOrText)
-            val wrappedHtml = if (isHtml) {
-                if (htmlOrText.contains("<html", true) || htmlOrText.contains("<!DOCTYPE", true) || htmlOrText.contains("<table", true)) {
-                    htmlOrText
+            val nowMillis = System.currentTimeMillis()
+            val dt = BankDraftEngine.buildWibDateTime(nowMillis)
+            val bankKey = AppPresets.detectBankKey("$subject $htmlOrText")
+            val uniqueRef = BankDraftEngine.generateUniqueBankReference(bankKey, nowMillis)
+
+            val refreshedBody = BankDraftEngine.synchronizeDynamicFieldsInHtml(
+                html = htmlOrText,
+                newReference = uniqueRef,
+                nowMillis = nowMillis,
+                refreshRef = true
+            ).let { body ->
+                if (customCancelLink.isNotBlank()) {
+                    body.replace(Regex("""\[(?:LINK_PEMBATALAN|CANCEL_LINK|LINK)]""", RegexOption.IGNORE_CASE), customCancelLink.trim())
                 } else {
-                    """<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto;">$htmlOrText</div>"""
+                    body
                 }
-            } else {
-                """<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #334155; max-width: 600px; margin: 0 auto;">${htmlOrText.replace("\n", "<br>")}</div>"""
             }
 
-            val plainText = htmlOrText
+            val activeSubject = BankDraftEngine.synchronizeSubject(subject.trim(), uniqueRef, nowMillis)
+
+            val isHtml = Regex("<[a-z][\\s\\S]*>", RegexOption.IGNORE_CASE).containsMatchIn(refreshedBody)
+            val wrappedHtml = if (isHtml) {
+                if (refreshedBody.contains("<html", true) || refreshedBody.contains("<!DOCTYPE", true) || refreshedBody.contains("<table", true)) {
+                    refreshedBody
+                } else {
+                    """<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #1e293b; max-width: 600px; margin: 0 auto;">$refreshedBody</div>"""
+                }
+            } else {
+                """<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #334155; max-width: 600px; margin: 0 auto;">${refreshedBody.replace("\n", "<br>")}</div>"""
+            }
+
+            val plainText = refreshedBody
                 .replace(Regex("<style[^>]*>[\\s\\S]*?</style>", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("<script[^>]*>[\\s\\S]*?</script>", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("<[^>]*>"), " ")
                 .replace("&nbsp;", " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
-                .ifEmpty { subject.trim() }
-
-            val bankKey = AppPresets.detectBankKey("$subject $htmlOrText")
-            val bankPrefix = AppPresets.banks.find { it.key == bankKey }?.refPrefix ?: "BCA"
-            val uniqueRef = "$bankPrefix-${Random.nextLong(10000000000L, 99999999999L)}"
+                .ifEmpty { activeSubject }
 
             val response = api.sendEmail(
                 SendEmailRequest(
                     to = to.trim(),
-                    subject = subject.trim(),
+                    subject = activeSubject,
                     text = plainText,
                     html = wrappedHtml,
-                    smtpConfig = cleanedCfg,
-                    clientDateTime = buildClientDateTime(),
+                    smtpConfig = if (cleanedCfg.username.isNotBlank()) cleanedCfg else null,
+                    clientDateTime = dt,
                     clientRef = uniqueRef,
                     clientTimezone = "Asia/Jakarta"
                 )
@@ -169,12 +161,8 @@ class GSwiftRepository(
                 Result.success(body)
             } else {
                 val errBody = response.errorBody()?.string()
-                val parsed = runCatching {
-                    gson.fromJson(errBody, SendEmailResponse::class.java)
-                }.getOrNull()
-                Result.failure(
-                    Exception(parsed?.error ?: "HTTP ${response.code()}: Gagal mengirim email.")
-                )
+                val msg = extractErrorMessage(errBody, response.code())
+                Result.failure(Exception(msg))
             }
         } catch (e: Exception) {
             Result.failure(Exception(e.message ?: "Gagal terhubung ke server relay."))
@@ -190,15 +178,21 @@ class GSwiftRepository(
         cancelLink: String,
         customDataRules: String
     ): Result<ChatAiResponse> = safeCall {
-        val mappedHistory = history.takeLast(12).map {
-            ChatHistoryItem(role = it.role, text = it.text)
-        }
-        val tzFmt = SimpleDateFormat("dd MMMM yyyy, HH:mm", Locale.forLanguageTag("id-ID"))
+        val mappedHistory = history
+            .filterNot { it.id == "welcome" || it.isError }
+            .takeLast(12)
+            .map { ChatHistoryItem(role = it.role, text = it.text) }
+
+        val locale = Locale.forLanguageTag("id-ID")
+        val tzFmt = SimpleDateFormat("EEEE, dd MMMM yyyy HH:mm", locale)
         tzFmt.timeZone = TimeZone.getTimeZone("Asia/Jakarta")
+        val clientTimeStr = "${tzFmt.format(Date())} WIB"
+
         api.chatAi(
             ChatAiRequest(
                 message = message,
                 history = mappedHistory,
+                clientTime = clientTimeStr,
                 cancelLink = cancelLink.ifBlank { null },
                 customDataRules = customDataRules.ifBlank { null },
                 model = model,
@@ -206,6 +200,18 @@ class GSwiftRepository(
                 scenario = scenario
             )
         )
+    }
+
+    private fun extractErrorMessage(rawError: String?, httpCode: Int): String {
+        if (rawError.isNullOrBlank()) return "HTTP $httpCode error"
+        return runCatching {
+            val obj = gson.fromJson(rawError, JsonObject::class.java)
+            when {
+                obj.has("error") && !obj.get("error").isJsonNull -> obj.get("error").asString
+                obj.has("message") && !obj.get("message").isJsonNull -> obj.get("message").asString
+                else -> rawError
+            }
+        }.getOrDefault(rawError)
     }
 
     private suspend inline fun <T> safeCall(
@@ -218,12 +224,7 @@ class GSwiftRepository(
                 Result.success(body)
             } else {
                 val rawError = response.errorBody()?.string()
-                Result.failure(
-                    Exception(
-                        if (!rawError.isNullOrBlank()) rawError
-                        else "HTTP ${response.code()} error"
-                    )
-                )
+                Result.failure(Exception(extractErrorMessage(rawError, response.code())))
             }
         } catch (e: Exception) {
             Result.failure(Exception(e.message ?: "Kesalahan jaringan."))

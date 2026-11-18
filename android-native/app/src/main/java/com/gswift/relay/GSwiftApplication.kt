@@ -16,9 +16,9 @@ class GSwiftApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        val okHttp = NetworkModule.createOkHttpClient()
-        val apiService = NetworkModule.createApiService(okHttp)
         val storage = SecureStorageManager(applicationContext)
+        val okHttp = NetworkModule.createOkHttpClient(storage)
+        val apiService = NetworkModule.createApiService(okHttp)
         repository = GSwiftRepository(apiService, storage)
         connectivityObserver = ConnectivityObserver(applicationContext)
     }
