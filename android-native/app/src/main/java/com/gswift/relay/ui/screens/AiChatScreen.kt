@@ -979,7 +979,7 @@ private fun ChatBubble(
                                     }
                                 }
 
-                                if (!message.extractedSubject.isNullOrBlank()) {
+                                message.extractedSubject?.takeIf { it.isNotBlank() }?.let { subj ->
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -989,7 +989,7 @@ private fun ChatBubble(
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
                                         Text(
-                                            text = "Subjek: ${message.extractedSubject}",
+                                            text = "Subjek: $subj",
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = NavyPrimary,
@@ -1003,7 +1003,7 @@ private fun ChatBubble(
                                             tint = Color(0xFF64748B),
                                             modifier = Modifier
                                                 .size(14.dp)
-                                                .clickable { onCopyText(message.extractedSubject) }
+                                                .clickable { onCopyText(subj) }
                                         )
                                     }
                                     HorizontalDivider(color = Color(0xFFE2E8F0))
